@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+@theme static {
+  /* Enamel dial porcelain ground, deep marine cast-iron ink (#102b50), viridian emerald (#20bd83) */
+  --color-background: oklch(0.964 0.008 228);
+  --color-surface: oklch(0.994 0.003 228);
+  --color-foreground: oklch(0.24 0.058 252);
+  --color-muted: oklch(0.45 0.035 246);
+  --color-border: oklch(0.56 0.026 242);
+
+  --color-primary: oklch(0.28 0.068 252);
+  --color-primary-foreground: oklch(0.992 0.003 228);
+
+  --color-accent: oklch(0.47 0.125 163);
+  --color-accent-mark: oklch(0.68 0.148 162);
+  --color-accent-foreground: oklch(0.992 0.003 228);
+
+  --color-warning: oklch(0.46 0.115 68);
+  --color-danger: oklch(0.45 0.162 27);
+
+  --font-sans: "Instrument Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+
+  --text-display: clamp(1.85rem, 1.35rem + 1.3vw, 2.55rem);
+  --text-display--line-height: 1.08;
+  --text-display--font-weight: 600;
+
+  --text-title: clamp(1.25rem, 1.1rem + 0.45vw, 1.5rem);
+  --text-title--line-height: 1.2;
+  --text-title--font-weight: 600;
+
+  --text-section: 1.0625rem;
+  --text-section--line-height: 1.35;
+  --text-section--font-weight: 600;
+
+  --text-body: 0.9375rem;
+  --text-body--line-height: 1.55;
+
+  --text-label: 0.875rem;
+  --text-label--line-height: 1.4;
+  --text-label--font-weight: 500;
+
+  --text-caption: 0.78125rem;
+  --text-caption--line-height: 1.4;
+
+  --radius-card: 0.5rem;
+  --radius-control: 0.375rem;
+  --shadow-surface: 0 1px 2px oklch(0.24 0.05 252 / 0.04);
+}
+
+html {
+  font-family: var(--font-sans);
+  font-synthesis-weight: none;
+  color: var(--color-foreground);
+  background-color: var(--color-background);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  text-wrap: balance;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *:not(.animate-spin):not(.animate-pulse),
+  *:not(.animate-spin):not(.animate-pulse)::before,
+  *:not(.animate-spin):not(.animate-pulse)::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
