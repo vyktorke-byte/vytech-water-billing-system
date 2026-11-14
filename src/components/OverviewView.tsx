@@ -5,7 +5,6 @@ import {
   ConnectionStatus,
   InvoiceStatus,
   PeriodFilterId,
-  SupplyZone,
 } from '../types/billing';
 import {
   ACTIVE_CYCLE_ID,
@@ -18,7 +17,8 @@ import {
   TODAY_LOCAL,
 } from '../lib/billingMath';
 import { Button, Surface } from './ui';
-import { CycleChartDatum, CycleTrendChart, ZoneNetworkMap, ZoneSummaryNode } from './BillingCharts';
+import { CycleChartDatum, CycleTrendChart } from './BillingCharts';
+import { LifetimePaymentLedger } from './LifetimePaymentLedger';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -27,18 +27,19 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock,
+  Download,
   Gauge,
   TrendingUp,
-  Zap,
 } from 'lucide-react';
 
 interface OverviewViewProps {
   state: BillingStoreState;
   period: PeriodFilterId;
   onPeriodChange: (p: PeriodFilterId) => void;
-  onNavigateInvoices: (opts?: { status?: InvoiceStatus | 'ALL'; zone?: SupplyZone | 'ALL'; invoiceId?: string }) => void;
+  onNavigateInvoices: (opts?: { status?: InvoiceStatus | 'ALL'; invoiceId?: string }) => void;
   onNavigateReadings: (connectionId?: string) => void;
   onOpenOverdueUtility?: () => void;
+  onDownloadMonthlyReport?: () => void;
 }
 
 const PERIOD_OPTIONS: { id: PeriodFilterId; label: string }[] = [
@@ -55,6 +56,7 @@ export function OverviewView({
   onNavigateInvoices,
   onNavigateReadings,
   onOpenOverdueUtility,
+  onDownloadMonthlyReport,
 }: OverviewViewProps) {
   const [showAllQueue, setShowAllQueue] = useState(false);
 
@@ -127,35 +129,6 @@ export function OverviewView({
     });
   }, [state.invoices, state.readings, periodSpec]);
 
-  const zoneSummaries: ZoneSummaryNode[] = useMemo(() => {
-    const activeCycleSet = new Set(periodSpec.current);
-    const allZones = [
-      SupplyZone.OldBuilding,
-      SupplyZone.NewBuilding,
-      SupplyZone.HeavyConsumer,
-    ];
-
-    return allZones.map((zone) => {
-      const zoneConns = state.connections.filter((c) => c.zone === zone);
-      const connIds = new Set(zoneConns.map((c) => c.id));
-      const zoneInvoices = state.invoices.filter(
-        (i) => connIds.has(i.connectionId) && activeCycleSet.has(i.cycleId)
-      );
-      const zoneReadings = state.readings.filter(
-        (r) => connIds.has(r.connectionId) && activeCycleSet.has(r.cycleId)
-      );
-
-      return {
-        zone,
-        connectionsCount: zoneConns.length,
-        consumptionTenthsM3: zoneReadings.reduce((s, r) => s + r.consumptionTenthsM3, 0),
-        billedCents: zoneInvoices.reduce((s, i) => s + i.cycleChargesKsh, 0),
-        collectedCents: zoneInvoices.reduce((s, i) => s + i.amountPaidKsh, 0),
-        overdueCount: zoneInvoices.filter((i) => i.status === InvoiceStatus.Overdue).length,
-      };
-    });
-  }, [state.connections, state.invoices, state.readings, periodSpec]);
-
   // Actionable work queue for current billing operations (unbilled Nov meters + spikes + overdue accounts)
   const attentionQueue = useMemo(() => {
     const items: {
@@ -179,7 +152,7 @@ export function OverviewView({
           id: `unbilled-${conn.id}`,
           kind: 'unbilled',
           title: conn.customerName,
-          meta: `${conn.meterSerial} · ${conn.zone} · Prev ${formatTenthsM3(conn.lastReadingTenthsM3)}`,
+          meta: `${conn.meterSerial} · ${conn.premiseAddress} · Prev ${formatTenthsM3(conn.lastReadingTenthsM3)}`,
           statusWord: 'Awaiting Nov reading',
           statusToneClass: 'text-warning',
           actionLabel: 'Enter reading',
@@ -254,7 +227,6 @@ export function OverviewView({
       accountCode: string;
       meterSerial: string;
       premiseAddress: string;
-      zone: SupplyZone;
       currentConsumptionTenths: number;
       trailingMeanTenths: number | null;
       ratio: number | null;
@@ -283,7 +255,6 @@ export function OverviewView({
           accountCode: conn.accountCode,
           meterSerial: conn.meterSerial,
           premiseAddress: conn.premiseAddress,
-          zone: conn.zone,
           currentConsumptionTenths: r.consumptionTenthsM3,
           trailingMeanTenths: evalResult.trailingMeanTenthsM3,
           ratio: evalResult.ratio,
@@ -311,7 +282,6 @@ export function OverviewView({
       customerName: string;
       accountCode: string;
       phone: string;
-      zone: SupplyZone;
       dueDate: { year: number; month: number; day: number };
       dueFormatted: string;
       daysRemaining: number;
@@ -343,7 +313,6 @@ export function OverviewView({
           customerName: conn?.customerName || 'Water Consumer',
           accountCode: conn?.accountCode || 'N/A',
           phone: conn?.phone || '0712000000',
-          zone: conn?.zone || SupplyZone.NewBuilding,
           dueDate: inv.dueDate,
           dueFormatted: formatLocalDate(inv.dueDate),
           daysRemaining: diffDays,
@@ -379,28 +348,42 @@ export function OverviewView({
           Showing figures for <span className="font-medium text-foreground">{periodSpec.periodLabel}</span> · Click any metric to open its ledger rows
         </p>
 
-        <div
-          role="group"
-          aria-label="Billing period filter"
-          className="inline-flex flex-wrap rounded-control border border-border/45 bg-surface p-0.5"
-        >
-          {PERIOD_OPTIONS.map((opt) => {
-            const active = period === opt.id;
-            return (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => onPeriodChange(opt.id)}
-                className={`min-h-9 cursor-pointer whitespace-nowrap rounded-control px-3.5 text-caption font-medium transition-colors focus-visible:outline-2 focus-visible:outline-primary ${
-                  active
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted hover:text-foreground'
-                }`}
-              >
-                {opt.label}
-              </button>
-            );
-          })}
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div
+            role="group"
+            aria-label="Billing period filter"
+            className="inline-flex flex-wrap rounded-control border border-border/45 bg-surface p-0.5"
+          >
+            {PERIOD_OPTIONS.map((opt) => {
+              const active = period === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => onPeriodChange(opt.id)}
+                  className={`min-h-9 cursor-pointer whitespace-nowrap rounded-control px-3.5 text-caption font-medium transition-colors focus-visible:outline-2 focus-visible:outline-primary ${
+                    active
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted hover:text-foreground'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {onDownloadMonthlyReport ? (
+            <Button
+              tone="quiet"
+              size="sm"
+              onClick={onDownloadMonthlyReport}
+              title="Download official municipal PDF report aggregating billed vs. collected revenue for the active cycle"
+            >
+              <Download className="size-4" />
+              <span>Download Monthly Report</span>
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -494,6 +477,9 @@ export function OverviewView({
         </div>
       </Surface>
 
+      {/* Lifetime Payment Status: Who Has Paid & How Many Not Paid */}
+      <LifetimePaymentLedger state={state} onNavigateInvoices={onNavigateInvoices} />
+
       {/* High Consumption Alert Widget */}
       <Surface className="overflow-hidden border-border/45">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/35 bg-surface px-5 py-3.5">
@@ -553,7 +539,6 @@ export function OverviewView({
                 <thead>
                   <tr className="border-b border-border/30 text-caption font-semibold uppercase tracking-wider text-muted bg-surface-muted/20">
                     <th className="px-4 py-2.5">Premise & Meter</th>
-                    <th className="px-4 py-2.5">Zone</th>
                     <th className="px-4 py-2.5 text-right">Nov Usage</th>
                     <th className="px-4 py-2.5 text-right">Baseline Mean</th>
                     <th className="px-4 py-2.5 text-right">Surge Factor</th>
@@ -575,11 +560,6 @@ export function OverviewView({
                             <span className="font-mono text-foreground/80">{alert.meterSerial}</span>
                             {` · ${alert.accountCode}`}
                           </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className="inline-flex items-center rounded-control border border-border/45 bg-surface px-2 py-0.5 text-caption text-foreground">
-                            {alert.zone}
-                          </span>
                         </td>
                         <td className="px-4 py-3 text-right">
                           <div className="font-mono font-semibold text-danger">
@@ -708,7 +688,6 @@ export function OverviewView({
                 <thead>
                   <tr className="border-b border-border/30 text-caption font-semibold uppercase tracking-wider text-muted bg-surface-muted/20">
                     <th className="px-4 py-2.5">Customer & Account</th>
-                    <th className="px-4 py-2.5">Zone</th>
                     <th className="px-4 py-2.5">Invoice</th>
                     <th className="px-4 py-2.5">Maturity Date</th>
                     <th className="px-4 py-2.5 text-center">Days Remaining</th>
@@ -732,11 +711,6 @@ export function OverviewView({
                             <span className="font-mono text-foreground/80">{item.accountCode}</span>
                             {` · ${item.phone}`}
                           </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className="inline-flex items-center rounded-control border border-border/45 bg-surface px-2 py-0.5 text-caption text-foreground">
-                            {item.zone}
-                          </span>
                         </td>
                         <td className="px-4 py-3">
                           <span className="font-mono text-caption font-medium text-foreground">
@@ -855,95 +829,6 @@ export function OverviewView({
         </Surface>
       </div>
 
-      {/* District Supply Zones Schematic + Table */}
-      <Surface className="divide-y divide-border/35">
-        <div className="px-5 py-4">
-          <h2 className="text-section text-foreground">District metered supply zones</h2>
-          <p className="text-caption text-muted">
-            {`Metered volume and billing reconciliation by hydraulic zone · ${periodSpec.periodLabel}`}
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 divide-y divide-border/35 lg:grid-cols-12 lg:divide-x lg:divide-y-0">
-          <div className="p-5 lg:col-span-5">
-            <ZoneNetworkMap
-              zones={zoneSummaries}
-              onSelectZone={(zone) => onNavigateInvoices({ zone })}
-            />
-            <p className="mt-2 text-caption text-muted">
-              Select any district node to filter its invoices in the ledger. Ochre rings mark zones with overdue balances.
-            </p>
-          </div>
-
-          <div className="overflow-x-auto lg:col-span-7">
-            <table className="w-full border-collapse text-left">
-              <thead>
-                <tr className="border-b border-border/35 text-caption font-semibold uppercase tracking-wider text-muted">
-                  <th className="px-4 py-3">Supply zone</th>
-                  <th className="px-4 py-3 text-right">Delivered (m³)</th>
-                  <th className="px-4 py-3 text-right">Billed (KSh)</th>
-                  <th className="px-4 py-3 text-right">Collected (KSh)</th>
-                  <th className="px-4 py-3 text-right">Rate</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/30 text-body">
-                {zoneSummaries.map((z) => {
-                  const rate = z.billedCents > 0 ? (z.collectedCents / z.billedCents) * 100 : 0;
-                  return (
-                    <tr
-                      key={z.zone}
-                      className="transition-colors hover:bg-background/60"
-                    >
-                      <td className="px-4 py-3.5">
-                        <button
-                          type="button"
-                          onClick={() => onNavigateInvoices({ zone: z.zone })}
-                          className="cursor-pointer text-left font-medium text-foreground hover:text-primary focus-visible:outline-2 focus-visible:outline-primary"
-                        >
-                          {z.zone}
-                        </button>
-                        <div className="text-caption text-muted">
-                          {`${z.connectionsCount} connections`}
-                          {z.overdueCount > 0 ? (
-                            <>
-                              {' · '}
-                              <span className="font-medium text-warning">
-                                {`${z.overdueCount} overdue`}
-                              </span>
-                            </>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3.5 text-right tabular-nums text-foreground">
-                        {formatTenthsM3(z.consumptionTenthsM3)}
-                      </td>
-                      <td className="px-4 py-3.5 text-right tabular-nums text-foreground">
-                        {formatCents(z.billedCents)}
-                      </td>
-                      <td className="px-4 py-3.5 text-right tabular-nums text-foreground">
-                        {formatCents(z.collectedCents)}
-                      </td>
-                      <td className="px-4 py-3.5 text-right tabular-nums">
-                        <span
-                          className={
-                            rate >= 80
-                              ? 'font-medium text-accent'
-                              : rate >= 60
-                                ? 'text-foreground'
-                                : 'font-medium text-warning'
-                          }
-                        >
-                          {`${rate.toFixed(1)}%`}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </Surface>
     </div>
   );
 }

@@ -1,11 +1,15 @@
 import {
   BillingCycleId,
   BillingCycleMeta,
+  BillingStoreState,
   InvoiceStatus,
   MeterReading,
+  PaymentMethod,
+  PaymentRecord,
   PeriodFilterId,
   TariffCategory,
   TariffSchedule,
+  WaterConnection,
   WaterInvoice,
 } from '../types/billing';
 
@@ -56,6 +60,24 @@ export const CYCLES: BillingCycleMeta[] = [
 
 export const ACTIVE_CYCLE_ID: BillingCycleId = '2026-11';
 export const TODAY_LOCAL = { year: 2026, month: 11, day: 11 };
+
+export const DEFAULT_PAYBILL_NUMBER = '303030';
+export const ALTERNATE_PAYBILL_NUMBER = '247247';
+export const PAYBILL_SHORTCODES = ['303030', '247247'] as const;
+export const DEFAULT_PAYBILL_NAME = 'MajiTrack Water Billing';
+
+/** Generates a realistic 10-character Safaricom M-Pesa transaction reference (e.g. QKB87XY29M) */
+export function generateMpesaReference(): string {
+  const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const digits = '0123456789';
+  const prefix = 'QK' + letters.charAt(Math.floor(Math.random() * letters.length));
+  let code = prefix;
+  for (let i = 0; i < 7; i++) {
+    const pool = i % 2 === 0 ? digits : letters;
+    code += pool.charAt(Math.floor(Math.random() * pool.length));
+  }
+  return code;
+}
 
 const kshFormatter = new Intl.NumberFormat('en-KE', {
   minimumFractionDigits: 0,
@@ -250,14 +272,13 @@ export function deriveInvoiceStatus(
 
 export function buildInvoicesCsv(
   invoices: WaterInvoice[],
-  connectionLookup: Map<string, { accountCode: string; customerName: string; zone: string; meterSerial: string }>
+  connectionLookup: Map<string, { accountCode: string; customerName: string; meterSerial: string }>
 ): string {
   const headers = [
     'Invoice Number',
     'Billing Cycle',
     'Account Code',
     'Customer Name',
-    'Supply Zone',
     'Meter Serial',
     'Previous (m3)',
     'Current (m3)',
@@ -286,7 +307,6 @@ export function buildInvoicesCsv(
       inv.cycleId,
       conn?.accountCode ?? inv.connectionId,
       conn?.customerName ?? 'Unknown',
-      conn?.zone ?? '',
       conn?.meterSerial ?? '',
       formatTenthsM3Plain(inv.previousTenthsM3),
       formatTenthsM3Plain(inv.currentTenthsM3),
@@ -305,3 +325,185 @@ export function buildInvoicesCsv(
 
   return [headers.join(','), ...rows].join('\n');
 }
+
+export type LifetimeStanding = 'PAID_IN_FULL' | 'HAS_UNPAID' | 'NEVER_PAID' | 'NO_BILLS';
+
+export interface LifetimeAccountPaymentRow {
+  connection: WaterConnection;
+  totalBillsCount: number;
+  paidBillsCount: number;
+  unpaidBillsCount: number;
+  paymentCount: number;
+  lifetimeBilledKsh: number;
+  lifetimePaidKsh: number;
+  currentBalanceKsh: number;
+  latestInvoice: WaterInvoice | null;
+  latestPayment: PaymentRecord | null;
+  standing: LifetimeStanding;
+}
+
+export interface LifetimePaymentSummary {
+  rows: LifetimeAccountPaymentRow[];
+  totalAccounts: number;
+  accountsPaidInFullCount: number;
+  accountsWithAnyPaymentCount: number;
+  accountsNotPaidCount: number;
+  accountsNeverPaidCount: number;
+  accountsNoBillsCount: number;
+  totalPaidInvoicesLifetime: number;
+  totalUnpaidInvoicesLifetime: number;
+  totalLifetimeCollectedKsh: number;
+  totalLifetimeBilledKsh: number;
+  totalLifetimeOutstandingKsh: number;
+}
+
+export function computeLifetimePaymentSummary(state: BillingStoreState): LifetimePaymentSummary {
+  const invoicesByConn = new Map<string, WaterInvoice[]>();
+  const invToConn = new Map<string, string>();
+  for (const inv of state.invoices) {
+    invToConn.set(inv.id, inv.connectionId);
+    const arr = invoicesByConn.get(inv.connectionId) ?? [];
+    arr.push(inv);
+    invoicesByConn.set(inv.connectionId, arr);
+  }
+
+  const paymentsByConn = new Map<string, PaymentRecord[]>();
+  for (const pay of state.payments) {
+    const connId = invToConn.get(pay.invoiceId);
+    if (!connId) continue;
+    const arr = paymentsByConn.get(connId) ?? [];
+    arr.push(pay);
+    paymentsByConn.set(connId, arr);
+  }
+
+  const dateScore = (d: { year: number; month: number; day: number }) =>
+    d.year * 10000 + d.month * 100 + d.day;
+
+  const rows: LifetimeAccountPaymentRow[] = state.connections.map((conn) => {
+    const connInvs = [...(invoicesByConn.get(conn.id) ?? [])].sort((a, b) =>
+      b.cycleId.localeCompare(a.cycleId)
+    );
+    const connPays = [...(paymentsByConn.get(conn.id) ?? [])].sort(
+      (a, b) => dateScore(b.paidDate) - dateScore(a.paidDate)
+    );
+
+    const totalBillsCount = connInvs.length;
+    const paidBillsCount = connInvs.filter((i) => i.status === InvoiceStatus.Paid).length;
+    const unpaidBillsCount = totalBillsCount - paidBillsCount;
+
+    const lifetimeBilledKsh = connInvs.reduce((s, i) => s + i.cycleChargesKsh, 0);
+    const invoicesPaidSum = connInvs.reduce((s, i) => s + i.amountPaidKsh, 0);
+    const receiptsSum = connPays.reduce((s, p) => s + p.amountKsh, 0);
+    const lifetimePaidKsh = Math.max(invoicesPaidSum, receiptsSum);
+
+    const latestInvoice = connInvs[0] ?? null;
+    const currentBalanceKsh = latestInvoice
+      ? Math.max(0, latestInvoice.totalPayableKsh - latestInvoice.amountPaidKsh)
+      : 0;
+
+    let standing: LifetimeStanding;
+    if (totalBillsCount === 0) {
+      standing = 'NO_BILLS';
+    } else if (unpaidBillsCount === 0 && currentBalanceKsh === 0) {
+      standing = 'PAID_IN_FULL';
+    } else if (lifetimePaidKsh === 0) {
+      standing = 'NEVER_PAID';
+    } else {
+      standing = 'HAS_UNPAID';
+    }
+
+    return {
+      connection: conn,
+      totalBillsCount,
+      paidBillsCount,
+      unpaidBillsCount,
+      paymentCount: connPays.length,
+      lifetimeBilledKsh,
+      lifetimePaidKsh,
+      currentBalanceKsh,
+      latestInvoice,
+      latestPayment: connPays[0] ?? null,
+      standing,
+    };
+  });
+
+  // Sort: unpaid / never-paid accounts with highest open balance first, then paid accounts by lifetime paid desc
+  rows.sort((a, b) => {
+    if (a.currentBalanceKsh !== b.currentBalanceKsh) {
+      return b.currentBalanceKsh - a.currentBalanceKsh;
+    }
+    return b.lifetimePaidKsh - a.lifetimePaidKsh;
+  });
+
+  let accountsPaidInFullCount = 0;
+  let accountsWithAnyPaymentCount = 0;
+  let accountsNotPaidCount = 0;
+  let accountsNeverPaidCount = 0;
+  let accountsNoBillsCount = 0;
+  let totalPaidInvoicesLifetime = 0;
+  let totalUnpaidInvoicesLifetime = 0;
+  let totalLifetimeCollectedKsh = 0;
+  let totalLifetimeBilledKsh = 0;
+  let totalLifetimeOutstandingKsh = 0;
+
+  for (const row of rows) {
+    if (row.standing === 'PAID_IN_FULL') accountsPaidInFullCount += 1;
+    else if (row.standing === 'NO_BILLS') accountsNoBillsCount += 1;
+    else {
+      accountsNotPaidCount += 1;
+      if (row.standing === 'NEVER_PAID') accountsNeverPaidCount += 1;
+    }
+    if (row.lifetimePaidKsh > 0) accountsWithAnyPaymentCount += 1;
+
+    totalPaidInvoicesLifetime += row.paidBillsCount;
+    totalUnpaidInvoicesLifetime += row.unpaidBillsCount;
+    totalLifetimeCollectedKsh += row.lifetimePaidKsh;
+    totalLifetimeBilledKsh += row.lifetimeBilledKsh;
+    totalLifetimeOutstandingKsh += row.currentBalanceKsh;
+  }
+
+  return {
+    rows,
+    totalAccounts: rows.length,
+    accountsPaidInFullCount,
+    accountsWithAnyPaymentCount,
+    accountsNotPaidCount,
+    accountsNeverPaidCount,
+    accountsNoBillsCount,
+    totalPaidInvoicesLifetime,
+    totalUnpaidInvoicesLifetime,
+    totalLifetimeCollectedKsh,
+    totalLifetimeBilledKsh,
+    totalLifetimeOutstandingKsh,
+  };
+}
+
+/** Normalizes Kenyan phone numbers (e.g. 0712345001 -> 254712345001) for wa.me links */
+export function formatWhatsAppPhone(phone: string): string {
+  const digits = phone.replace(/[^0-9]/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('0')) {
+    return `254${digits.slice(1)}`;
+  }
+  if (digits.startsWith('254')) {
+    return digits;
+  }
+  return `254${digits}`;
+}
+
+export function buildWhatsAppUrl(phone: string, message: string): string {
+  const waPhone = formatWhatsAppPhone(phone);
+  if (!waPhone) {
+    return `https://wa.me/?text=${encodeURIComponent(message)}`;
+  }
+  return `https://wa.me/${waPhone}?text=${encodeURIComponent(message)}`;
+}
+
+export function formatDispatchTimeNow(): string {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+

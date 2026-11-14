@@ -18,8 +18,8 @@
   --color-warning: oklch(0.46 0.115 68);
   --color-danger: oklch(0.45 0.162 27);
 
-  --font-sans: "Instrument Sans", system-ui, -apple-system, sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, monospace;
+  --font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
 
   --text-display: clamp(1.85rem, 1.35rem + 1.3vw, 2.55rem);
   --text-display--line-height: 1.08;
@@ -70,6 +70,21 @@ h6 {
   }
   body {
     background: white !important;
+    color: black !important;
+  }
+  dialog {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: white !important;
+  }
+  dialog::backdrop {
+    display: none !important;
   }
 }
 

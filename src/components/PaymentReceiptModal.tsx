@@ -1,8 +1,18 @@
 import React from 'react';
-import { PaymentRecord, WaterConnection, WaterInvoice } from '../types/billing';
-import { formatCents, formatLocalDate, formatTenthsM3 } from '../lib/billingMath';
+import {
+  NotificationChannel,
+  PaymentRecord,
+  WaterConnection,
+  WaterInvoice,
+} from '../types/billing';
+import {
+  buildWhatsAppUrl,
+  formatCents,
+  formatLocalDate,
+  formatTenthsM3,
+} from '../lib/billingMath';
 import { Button, ModalDialog } from './ui';
-import { CheckCircle2, Download, Printer, ShieldCheck } from 'lucide-react';
+import { CheckCircle2, Mail, MessageSquare, Printer, ShieldCheck } from 'lucide-react';
 
 export interface PaymentReceiptModalProps {
   open: boolean;
@@ -10,6 +20,16 @@ export interface PaymentReceiptModalProps {
   payment: PaymentRecord | null;
   invoice: WaterInvoice | null;
   connection: WaterConnection | null;
+  onNotificationLogged?: (entry: {
+    connectionId: string;
+    customerName: string;
+    accountCode: string;
+    invoiceId?: string;
+    invoiceNumber?: string;
+    channel: NotificationChannel;
+    recipient: string;
+    messageSummary: string;
+  }) => void;
 }
 
 const BRAND_LOGO_PATH = '/assets/aistudio/vytech-icon_a1bffa57.svg';
@@ -20,6 +40,7 @@ export function PaymentReceiptModal({
   payment,
   invoice,
   connection,
+  onNotificationLogged,
 }: PaymentReceiptModalProps) {
   if (!payment) return null;
 
@@ -33,6 +54,70 @@ export function PaymentReceiptModal({
     ? Math.max(0, invoice.totalPayableKsh - invoice.amountPaidKsh)
     : 0;
 
+  const waMessage = `*OFFICIAL PAYMENT RECEIPT - MAJITRACK*
+Gawanji Heights Apartments
+
+Dear ${connection?.customerName || 'Resident'},
+We confirm receipt of your water payment:
+
+• Receipt Number: ${receiptNumber}
+• Transaction Ref: ${payment.reference}
+• Payment Channel: ${payment.method}
+• Amount Received: ${formatCents(payment.amountKsh)}
+• Date Credited: ${formatLocalDate(payment.paidDate)}
+• Account Code: ${connection?.accountCode || 'N/A'}
+• Meter Serial: ${connection?.meterSerial || 'N/A'}
+• Remaining Balance: ${formatCents(remainingBalanceKsh)}
+• Status: ${isFullyPaid ? 'FULLY SETTLED' : 'PARTIAL PAYMENT'}
+• Verification Hash: ${payment.id.slice(-8).toUpperCase()}
+
+Thank you for your payment!
+MajiTrack Water Billing · majitracksystembilling.net`;
+
+  const waUrl = buildWhatsAppUrl(connection?.phone || '', waMessage);
+
+  const emailSubject = `Payment Receipt - ${receiptNumber} (${payment.reference})`;
+  const emailBody = `Dear ${connection?.customerName || 'Valued Resident'},
+
+We have credited your water utility account with the following payment:
+
+Receipt Number: ${receiptNumber}
+Transaction Reference: ${payment.reference}
+Payment Channel: ${payment.method}
+Amount Received: ${formatCents(payment.amountKsh)}
+Date Credited: ${formatLocalDate(payment.paidDate)}
+Account Code: ${connection?.accountCode || 'N/A'}
+Premise: ${connection?.premiseAddress || 'N/A'}
+Invoice Credited: ${invoice?.invoiceNumber || 'Account Arrears'}
+Remaining Balance: ${formatCents(remainingBalanceKsh)}
+Verification Hash: ${payment.id.slice(-8).toUpperCase()}
+
+Sincerely,
+Management & Accounts
+MajiTrack Water Billing · Gawanji Heights Apartments`;
+
+  const mailtoUrl = `mailto:${encodeURIComponent(connection?.email || '')}?subject=${encodeURIComponent(
+    emailSubject
+  )}&body=${encodeURIComponent(emailBody)}`;
+
+  const logReceiptDispatch = (channel: 'WHATSAPP' | 'EMAIL') => {
+    if (!connection) return;
+    onNotificationLogged?.({
+      connectionId: connection.id,
+      customerName: connection.customerName,
+      accountCode: connection.accountCode,
+      invoiceId: invoice?.id,
+      invoiceNumber: invoice?.invoiceNumber,
+      channel,
+      recipient: channel === 'WHATSAPP' ? connection.phone : connection.email || connection.phone,
+      messageSummary: `${
+        channel === 'WHATSAPP' ? 'WhatsApp' : 'Email'
+      } payment receipt ${receiptNumber} (${formatCents(payment.amountKsh)} via ${
+        payment.method
+      })`,
+    });
+  };
+
   return (
     <ModalDialog
       open={open}
@@ -42,6 +127,44 @@ export function PaymentReceiptModal({
       maxWidthClass="max-w-xl"
     >
       <div className="space-y-6">
+        {/* Instant Dispatch Bar for WhatsApp, Email & PDF */}
+        <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-control border border-border/45 bg-surface-muted/40 p-3 text-caption no-print">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-foreground">Client:</span>
+            <span className="text-muted">
+              {connection?.phone || 'No phone'} {connection?.email ? `· ${connection.email}` : ''}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href={waUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => logReceiptDispatch('WHATSAPP')}
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-control bg-[#25D366] px-3 py-1.5 font-medium text-white shadow-xs transition-colors hover:brightness-105 focus-visible:outline-2 focus-visible:outline-[#25D366]"
+              title="Send official receipt via WhatsApp"
+            >
+              <MessageSquare className="size-3.5 fill-current" />
+              <span>WhatsApp Receipt</span>
+            </a>
+
+            <a
+              href={mailtoUrl}
+              onClick={() => logReceiptDispatch('EMAIL')}
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-control border border-border/60 bg-surface px-3 py-1.5 font-medium text-foreground transition-colors hover:bg-background hover:text-primary focus-visible:outline-2 focus-visible:outline-primary"
+              title="Send official receipt via Email"
+            >
+              <Mail className="size-3.5 text-primary" />
+              <span>Email Receipt</span>
+            </a>
+
+            <Button tone="primary" size="sm" onClick={handlePrint}>
+              <Printer className="size-3.5" />
+              <span>Print PDF</span>
+            </Button>
+          </div>
+        </div>
         {/* Printable Receipt Paper Container */}
         <div
           id="printable-payment-receipt"
@@ -52,7 +175,7 @@ export function PaymentReceiptModal({
             <div className="flex items-center gap-3">
               <img
                 src={BRAND_LOGO_PATH}
-                alt="Vytech Water Logo"
+                alt="MajiTrack Logo"
                 className="size-10 rounded-control object-contain"
                 onError={(e) => {
                   (e.currentTarget as HTMLElement).style.display = 'none';
@@ -60,13 +183,13 @@ export function PaymentReceiptModal({
               />
               <div>
                 <h2 className="text-section font-bold tracking-tight text-foreground">
-                  Vytech Water Utility
+                  MajiTrack Water Billing
                 </h2>
-                <p className="text-caption text-muted">
-                  Municipal & Estate Water Billing Services
+                <p className="text-caption font-semibold text-primary">
+                  Gawanji Heights Apartments
                 </p>
                 <p className="text-caption text-muted">
-                  Nairobi, Kenya · P.O. Box 40120 · Tel: +254 700 000 000
+                  majitracksystembilling.net · Direct Utility Reconciliation
                 </p>
               </div>
             </div>
@@ -99,9 +222,6 @@ export function PaymentReceiptModal({
               </div>
               <div className="text-muted">
                 Premise: {connection?.premiseAddress || 'N/A'}
-              </div>
-              <div className="text-muted">
-                Zone: <span className="font-medium text-foreground">{connection?.zone || 'N/A'}</span>
               </div>
             </div>
 
@@ -196,7 +316,7 @@ export function PaymentReceiptModal({
           <div className="mt-6 flex items-center justify-between border-t border-border/40 pt-4 text-caption text-muted">
             <div className="flex items-center gap-1.5">
               <ShieldCheck className="size-4 text-accent" />
-              <span>Electronically generated and verified by Vytech Water ERP</span>
+              <span>Electronically generated and verified by MajiTrack (majitracksystembilling.net)</span>
             </div>
             <div className="text-right font-mono text-[11px]">
               Auth Hash: {payment.id.slice(-8).toUpperCase()}

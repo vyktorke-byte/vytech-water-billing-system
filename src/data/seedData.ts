@@ -4,21 +4,33 @@ import {
   ConnectionStatus,
   InvoiceStatus,
   MeterReading,
+  NotificationLog,
+  PaybillSettings,
   PaymentMethod,
   PaymentRecord,
-  SupplyZone,
   TariffCategory,
   TariffSchedule,
   WaterConnection,
   WaterInvoice,
 } from '../types/billing';
 import {
+  ALTERNATE_PAYBILL_NUMBER,
   calculateWaterBill,
   CYCLES,
+  DEFAULT_PAYBILL_NAME,
+  DEFAULT_PAYBILL_NUMBER,
   deriveInvoiceStatus,
   evaluateConsumptionSpike,
+  formatCents,
   getCycleMeta,
 } from '../lib/billingMath';
+
+export const DEFAULT_PAYBILL_SETTINGS: PaybillSettings = {
+  primaryPaybill: DEFAULT_PAYBILL_NUMBER,
+  alternatePaybill: ALTERNATE_PAYBILL_NUMBER,
+  businessName: DEFAULT_PAYBILL_NAME,
+  accountLabel: 'Account Number',
+};
 
 export const DEFAULT_TARIFFS: Record<TariffCategory, TariffSchedule> = {
   [TariffCategory.Residential]: {
@@ -38,7 +50,6 @@ interface SeedSpec {
   accountCode: string;
   customerName: string;
   premiseAddress: string;
-  zone: SupplyZone;
   category: TariffCategory;
   meterSerial: string;
   status: ConnectionStatus;
@@ -58,7 +69,6 @@ const SEED_SPECS: SeedSpec[] = [
     accountCode: 'VW-1042',
     customerName: 'Alderwood Bakery & Mill',
     premiseAddress: '412 Quarry Road',
-    zone: SupplyZone.HeavyConsumer,
     category: TariffCategory.HeavyClients,
     meterSerial: 'MTR-84102',
     status: ConnectionStatus.Active,
@@ -71,16 +81,15 @@ const SEED_SPECS: SeedSpec[] = [
     paymentMethod: PaymentMethod.BankTransfer,
   },
   {
-    id: 'conn-ob-f1-a1',
+    id: 'conn-102',
     accountCode: 'VW-1048',
-    customerName: 'Floor 1 Room A1 Tenant',
-    premiseAddress: 'Old Building, Floor 1, Room A1',
-    zone: SupplyZone.OldBuilding,
+    customerName: 'Amina Hassan',
+    premiseAddress: 'Gawanji Heights, Unit 101',
     category: TariffCategory.Residential,
-    meterSerial: 'OB-F1-A1',
+    meterSerial: 'MTR-84108',
     status: ConnectionStatus.Active,
     phone: '0722345002',
-    email: 'ob.f1.a1@oldbuilding.ke',
+    email: 'amina.hassan@example.com',
     baseIndexTenthsM3: 13520,
     monthlyTenths: [174, 188, 196, 182, 186, 192],
     octPaymentBehavior: 'full',
@@ -88,16 +97,15 @@ const SEED_SPECS: SeedSpec[] = [
     paymentMethod: PaymentMethod.Mpesa,
   },
   {
-    id: 'conn-ob-f1-a6',
+    id: 'conn-103',
     accountCode: 'VW-1049',
-    customerName: 'Floor 1 Room A6 Tenant',
-    premiseAddress: 'Old Building, Floor 1, Room A6',
-    zone: SupplyZone.OldBuilding,
+    customerName: 'David Kamau',
+    premiseAddress: 'Gawanji Heights, Unit 102',
     category: TariffCategory.Residential,
-    meterSerial: 'OB-F1-A6',
+    meterSerial: 'MTR-84109',
     status: ConnectionStatus.Active,
     phone: '0722345006',
-    email: 'ob.f1.a6@oldbuilding.ke',
+    email: 'david.kamau@example.com',
     baseIndexTenthsM3: 9800,
     monthlyTenths: [142, 148, 155, 146, 150, 154],
     octPaymentBehavior: 'full',
@@ -105,16 +113,15 @@ const SEED_SPECS: SeedSpec[] = [
     paymentMethod: PaymentMethod.Mpesa,
   },
   {
-    id: 'conn-ob-f2-b1',
+    id: 'conn-104',
     accountCode: 'VW-1050',
-    customerName: 'Floor 2 Room B1 Tenant',
-    premiseAddress: 'Old Building, Floor 2, Room B1',
-    zone: SupplyZone.OldBuilding,
+    customerName: 'Grace Wanjiku',
+    premiseAddress: 'Gawanji Heights, Unit 201',
     category: TariffCategory.Residential,
-    meterSerial: 'OB-F2-B1',
+    meterSerial: 'MTR-84110',
     status: ConnectionStatus.Active,
     phone: '0722345010',
-    email: 'ob.f2.b1@oldbuilding.ke',
+    email: 'grace.wanjiku@example.com',
     baseIndexTenthsM3: 11200,
     monthlyTenths: [160, 168, 172, 165, 169, 175],
     octPaymentBehavior: 'full',
@@ -122,13 +129,12 @@ const SEED_SPECS: SeedSpec[] = [
     paymentMethod: PaymentMethod.Mpesa,
   },
   {
-    id: 'conn-103',
+    id: 'conn-105',
     accountCode: 'VW-1055',
-    customerName: 'Heavy Consumer F1 (Harbor Cold Storage)',
-    premiseAddress: 'Heavy Consumer Zone, Main Feeder F1',
-    zone: SupplyZone.HeavyConsumer,
+    customerName: 'Harbor Cold Storage',
+    premiseAddress: 'Commercial Wing, Suite C1',
     category: TariffCategory.HeavyClients,
-    meterSerial: 'HM-F1',
+    meterSerial: 'MTR-84155',
     status: ConnectionStatus.Active,
     phone: '0733345003',
     email: 'facilities@harborcold.example.com',
@@ -139,13 +145,12 @@ const SEED_SPECS: SeedSpec[] = [
     paymentMethod: PaymentMethod.BankTransfer,
   },
   {
-    id: 'conn-104',
+    id: 'conn-106',
     accountCode: 'VW-1061',
-    customerName: 'Heavy Consumer F2 (Crestline Linen)',
-    premiseAddress: 'Heavy Consumer Zone, Main Feeder F2',
-    zone: SupplyZone.HeavyConsumer,
+    customerName: 'Crestline Linen Services',
+    premiseAddress: 'Commercial Wing, Suite C2',
     category: TariffCategory.HeavyClients,
-    meterSerial: 'HM-F2',
+    meterSerial: 'MTR-84161',
     status: ConnectionStatus.Active,
     phone: '0711345004',
     email: 'ap@crestlinelinen.example.com',
@@ -156,18 +161,16 @@ const SEED_SPECS: SeedSpec[] = [
     paymentMethod: PaymentMethod.BankTransfer,
     novNote: 'Boiler feed valve stuck open; customer notified on Nov 10',
   },
-  // New Building Floor 1 Rooms A1 to A10
   {
-    id: 'conn-nb-f1-a1',
+    id: 'conn-107',
     accountCode: 'VW-1101',
-    customerName: 'Floor 1 Room A1 Tenant',
-    premiseAddress: 'New Building, Floor 1, Room A1',
-    zone: SupplyZone.NewBuilding,
+    customerName: 'Samuel Mutua',
+    premiseAddress: 'Gawanji Heights, Unit 202',
     category: TariffCategory.Residential,
-    meterSerial: 'NB-F1-A1',
+    meterSerial: 'MTR-84201',
     status: ConnectionStatus.Active,
     phone: '0712001001',
-    email: 'f1.a1@newbuilding.ke',
+    email: 'samuel.mutua@example.com',
     baseIndexTenthsM3: 1200,
     monthlyTenths: [95, 102, 110, 98, 104, 108],
     octPaymentBehavior: 'full',
@@ -175,16 +178,15 @@ const SEED_SPECS: SeedSpec[] = [
     paymentMethod: PaymentMethod.Mpesa,
   },
   {
-    id: 'conn-nb-f1-a2',
+    id: 'conn-108',
     accountCode: 'VW-1102',
-    customerName: 'Floor 1 Room A2 Tenant',
-    premiseAddress: 'New Building, Floor 1, Room A2',
-    zone: SupplyZone.NewBuilding,
+    customerName: 'Faith Njeri',
+    premiseAddress: 'Gawanji Heights, Unit 203',
     category: TariffCategory.Residential,
-    meterSerial: 'NB-F1-A2',
+    meterSerial: 'MTR-84202',
     status: ConnectionStatus.Active,
     phone: '0712001002',
-    email: 'f1.a2@newbuilding.ke',
+    email: 'faith.njeri@example.com',
     baseIndexTenthsM3: 1450,
     monthlyTenths: [112, 118, 125, 119, 122, 128],
     octPaymentBehavior: 'full',
@@ -192,137 +194,33 @@ const SEED_SPECS: SeedSpec[] = [
     paymentMethod: PaymentMethod.Mpesa,
   },
   {
-    id: 'conn-nb-f1-a3',
+    id: 'conn-109',
     accountCode: 'VW-1103',
-    customerName: 'Floor 1 Room A3 Tenant',
-    premiseAddress: 'New Building, Floor 1, Room A3',
-    zone: SupplyZone.NewBuilding,
+    customerName: 'Peter Ochieng',
+    premiseAddress: 'Gawanji Heights, Unit 301',
     category: TariffCategory.Residential,
-    meterSerial: 'NB-F1-A3',
+    meterSerial: 'MTR-84203',
     status: ConnectionStatus.Active,
     phone: '0712001003',
-    email: 'f1.a3@newbuilding.ke',
+    email: 'peter.ochieng@example.com',
     baseIndexTenthsM3: 980,
     monthlyTenths: [88, 92, 95, 90, 94, 96],
-    octPaymentBehavior: 'full',
-    novPaymentBehavior: 'full',
-    paymentMethod: PaymentMethod.Mpesa,
-  },
-  {
-    id: 'conn-nb-f1-a4',
-    accountCode: 'VW-1104',
-    customerName: 'Floor 1 Room A4 Tenant',
-    premiseAddress: 'New Building, Floor 1, Room A4',
-    zone: SupplyZone.NewBuilding,
-    category: TariffCategory.Residential,
-    meterSerial: 'NB-F1-A4',
-    status: ConnectionStatus.Active,
-    phone: '0712001004',
-    email: 'f1.a4@newbuilding.ke',
-    baseIndexTenthsM3: 1600,
-    monthlyTenths: [130, 136, 142, 138, 140, 145],
-    octPaymentBehavior: 'full',
-    novPaymentBehavior: 'full',
-    paymentMethod: PaymentMethod.Mpesa,
-  },
-  {
-    id: 'conn-nb-f1-a5',
-    accountCode: 'VW-1105',
-    customerName: 'Floor 1 Room A5 Tenant',
-    premiseAddress: 'New Building, Floor 1, Room A5',
-    zone: SupplyZone.NewBuilding,
-    category: TariffCategory.Residential,
-    meterSerial: 'NB-F1-A5',
-    status: ConnectionStatus.Active,
-    phone: '0712001005',
-    email: 'f1.a5@newbuilding.ke',
-    baseIndexTenthsM3: 840,
-    monthlyTenths: [74, 80, 85, 78, 82, 84],
-    octPaymentBehavior: 'full',
-    novPaymentBehavior: 'full',
-    paymentMethod: PaymentMethod.Mpesa,
-  },
-  {
-    id: 'conn-nb-f1-a6',
-    accountCode: 'VW-1106',
-    customerName: 'Floor 1 Room A6 Tenant',
-    premiseAddress: 'New Building, Floor 1, Room A6',
-    zone: SupplyZone.NewBuilding,
-    category: TariffCategory.Residential,
-    meterSerial: 'NB-F1-A6',
-    status: ConnectionStatus.Active,
-    phone: '0712001006',
-    email: 'f1.a6@newbuilding.ke',
-    baseIndexTenthsM3: 1110,
-    monthlyTenths: [102, 108, 114, 106, 110, 115],
     octPaymentBehavior: 'unpaid',
     novPaymentBehavior: 'pending',
     paymentMethod: PaymentMethod.Mpesa,
   },
   {
-    id: 'conn-nb-f1-a7',
-    accountCode: 'VW-1107',
-    customerName: 'Floor 1 Room A7 Tenant',
-    premiseAddress: 'New Building, Floor 1, Room A7',
-    zone: SupplyZone.NewBuilding,
+    id: 'conn-110',
+    accountCode: 'VW-1104',
+    customerName: 'Mary Akinyi',
+    premiseAddress: 'Gawanji Heights, Unit 302',
     category: TariffCategory.Residential,
-    meterSerial: 'NB-F1-A7',
+    meterSerial: 'MTR-84204',
     status: ConnectionStatus.Active,
-    phone: '0712001007',
-    email: 'f1.a7@newbuilding.ke',
-    baseIndexTenthsM3: 1330,
-    monthlyTenths: [120, 126, 131, 124, 128, 132],
-    octPaymentBehavior: 'full',
-    novPaymentBehavior: 'full',
-    paymentMethod: PaymentMethod.Mpesa,
-  },
-  {
-    id: 'conn-nb-f1-a8',
-    accountCode: 'VW-1108',
-    customerName: 'Floor 1 Room A8 Tenant',
-    premiseAddress: 'New Building, Floor 1, Room A8',
-    zone: SupplyZone.NewBuilding,
-    category: TariffCategory.Residential,
-    meterSerial: 'NB-F1-A8',
-    status: ConnectionStatus.Active,
-    phone: '0712001008',
-    email: 'f1.a8@newbuilding.ke',
-    baseIndexTenthsM3: 1720,
-    monthlyTenths: [145, 150, 158, 149, 154, 160],
-    octPaymentBehavior: 'full',
-    novPaymentBehavior: 'full',
-    paymentMethod: PaymentMethod.Mpesa,
-  },
-  {
-    id: 'conn-nb-f1-a9',
-    accountCode: 'VW-1109',
-    customerName: 'Floor 1 Room A9 Tenant',
-    premiseAddress: 'New Building, Floor 1, Room A9',
-    zone: SupplyZone.NewBuilding,
-    category: TariffCategory.Residential,
-    meterSerial: 'NB-F1-A9',
-    status: ConnectionStatus.Active,
-    phone: '0712001009',
-    email: 'f1.a9@newbuilding.ke',
-    baseIndexTenthsM3: 920,
-    monthlyTenths: [82, 88, 92, 86, 90, 93],
-    octPaymentBehavior: 'full',
-    novPaymentBehavior: 'full',
-    paymentMethod: PaymentMethod.Mpesa,
-  },
-  {
-    id: 'conn-nb-f1-a10',
-    accountCode: 'VW-1110',
-    customerName: 'Floor 1 Room A10 Tenant',
-    premiseAddress: 'New Building, Floor 1, Room A10',
-    zone: SupplyZone.NewBuilding,
-    category: TariffCategory.Residential,
-    meterSerial: 'NB-F1-A10',
-    status: ConnectionStatus.Active,
-    phone: '0712001010',
-    email: 'f1.a10@newbuilding.ke',
-    baseIndexTenthsM3: 1250,
-    monthlyTenths: [110, 116, 122, 114, 118, 124],
+    phone: '0712001004',
+    email: 'mary.akinyi@example.com',
+    baseIndexTenthsM3: 1600,
+    monthlyTenths: [130, 136, 142, 138, 140, 145],
     octPaymentBehavior: 'full',
     novPaymentBehavior: 'full',
     paymentMethod: PaymentMethod.Mpesa,
@@ -453,6 +351,9 @@ export function createInitialSeedState(): BillingStoreState {
           amountKsh: paidKsh,
           method: spec.paymentMethod,
           reference: `MP-${paymentSeq}`,
+          status: 'Completed',
+          connectionId: spec.id,
+          accountCode: spec.accountCode,
         });
       }
     });
@@ -462,7 +363,6 @@ export function createInitialSeedState(): BillingStoreState {
       accountCode: spec.accountCode,
       customerName,
       premiseAddress: spec.premiseAddress,
-      zone: spec.zone,
       category: spec.category,
       meterSerial: spec.meterSerial,
       status: spec.status,
@@ -473,6 +373,127 @@ export function createInitialSeedState(): BillingStoreState {
     });
   });
 
+  const notifications: NotificationLog[] = [];
+  const invByConnAndCycle = new Map<string, WaterInvoice>();
+  for (const inv of invoices) {
+    invByConnAndCycle.set(`${inv.connectionId}:${inv.cycleId}`, inv);
+  }
+
+  let notifSeq = 100;
+  const pushSeedNotif = (entry: Omit<NotificationLog, 'id'>) => {
+    notifSeq += 1;
+    notifications.push({
+      id: `ntf-${notifSeq}`,
+      ...entry,
+    });
+  };
+
+  for (const conn of connections) {
+    const octInv = invByConnAndCycle.get(`${conn.id}:2026-10`);
+    const novInv = invByConnAndCycle.get(`${conn.id}:2026-11`);
+
+    if (octInv) {
+      pushSeedNotif({
+        connectionId: conn.id,
+        customerName: conn.customerName,
+        accountCode: conn.accountCode,
+        invoiceId: octInv.id,
+        invoiceNumber: octInv.invoiceNumber,
+        channel: 'SMS',
+        recipient: conn.phone,
+        messageSummary: `Cycle 2026-10 water statement ${octInv.invoiceNumber} issued (${formatCents(
+          octInv.totalPayableKsh
+        )}). Paybill ${DEFAULT_PAYBILL_NUMBER} Ref ${conn.accountCode}.`,
+        status: octInv.status === InvoiceStatus.Overdue ? 'Delivered' : 'Delivered',
+        sentDate: { year: 2026, month: 10, day: 11 },
+        sentTime: '09:15',
+        dispatchedBy: 'System',
+      });
+
+      if (octInv.status === InvoiceStatus.Overdue) {
+        pushSeedNotif({
+          connectionId: conn.id,
+          customerName: conn.customerName,
+          accountCode: conn.accountCode,
+          invoiceId: octInv.id,
+          invoiceNumber: octInv.invoiceNumber,
+          channel: 'EMAIL',
+          recipient: conn.email,
+          messageSummary: `Overdue arrears reminder for ${octInv.invoiceNumber} (${formatCents(
+            Math.max(0, octInv.totalPayableKsh - octInv.amountPaidKsh)
+          )} due).`,
+          status: 'Delivered',
+          sentDate: { year: 2026, month: 10, day: 28 },
+          sentTime: '14:20',
+          dispatchedBy: 'VK',
+        });
+      }
+    }
+
+    if (novInv) {
+      pushSeedNotif({
+        connectionId: conn.id,
+        customerName: conn.customerName,
+        accountCode: conn.accountCode,
+        invoiceId: novInv.id,
+        invoiceNumber: novInv.invoiceNumber,
+        channel: 'EMAIL',
+        recipient: conn.email,
+        messageSummary: `November 2026 water bill ${novInv.invoiceNumber} (${formatCents(
+          novInv.totalPayableKsh
+        )}) due Nov 25, 2026.`,
+        status: conn.id === 'conn-109' ? 'Failed' : 'Delivered',
+        sentDate: { year: 2026, month: 11, day: 10 },
+        sentTime: '10:05',
+        dispatchedBy: 'System',
+      });
+
+      if (novInv.status === InvoiceStatus.Paid) {
+        pushSeedNotif({
+          connectionId: conn.id,
+          customerName: conn.customerName,
+          accountCode: conn.accountCode,
+          invoiceId: novInv.id,
+          invoiceNumber: novInv.invoiceNumber,
+          channel: 'WHATSAPP',
+          recipient: conn.phone,
+          messageSummary: `Official WhatsApp payment receipt confirmed for ${novInv.invoiceNumber} (${formatCents(
+            novInv.amountPaidKsh
+          )}).`,
+          status: 'Sent',
+          sentDate: { year: 2026, month: 11, day: 11 },
+          sentTime: '11:32',
+          dispatchedBy: 'VK',
+        });
+      } else if (novInv.status === InvoiceStatus.Overdue) {
+        pushSeedNotif({
+          connectionId: conn.id,
+          customerName: conn.customerName,
+          accountCode: conn.accountCode,
+          invoiceId: novInv.id,
+          invoiceNumber: novInv.invoiceNumber,
+          channel: 'SMS',
+          recipient: conn.phone,
+          messageSummary: `Urgent arrears notice: ${novInv.invoiceNumber} balance ${formatCents(
+            Math.max(0, novInv.totalPayableKsh - novInv.amountPaidKsh)
+          )}. Paybill ${DEFAULT_PAYBILL_NUMBER} Acc ${conn.accountCode}.`,
+          status: 'Delivered',
+          sentDate: { year: 2026, month: 11, day: 11 },
+          sentTime: '08:45',
+          dispatchedBy: 'JM',
+        });
+      }
+    }
+  }
+
+  // Most recent notifications first
+  notifications.sort((a, b) => {
+    const scoreA = a.sentDate.year * 10000 + a.sentDate.month * 100 + a.sentDate.day;
+    const scoreB = b.sentDate.year * 10000 + b.sentDate.month * 100 + b.sentDate.day;
+    if (scoreA !== scoreB) return scoreB - scoreA;
+    return b.sentTime.localeCompare(a.sentTime);
+  });
+
   return {
     version: 1,
     connections,
@@ -480,6 +501,9 @@ export function createInitialSeedState(): BillingStoreState {
     invoices,
     payments,
     tariffs: structuredClone(DEFAULT_TARIFFS),
+    notifications,
+    mpesaTransactions: [],
+    paybill: structuredClone(DEFAULT_PAYBILL_SETTINGS),
   };
 }
 
@@ -491,6 +515,9 @@ export function createEmptyFreshState(): BillingStoreState {
     invoices: [],
     payments: [],
     tariffs: structuredClone(DEFAULT_TARIFFS),
+    notifications: [],
+    mpesaTransactions: [],
+    paybill: structuredClone(DEFAULT_PAYBILL_SETTINGS),
   };
 }
 
@@ -510,7 +537,15 @@ export function loadBillingState(): BillingStoreState {
       Array.isArray(parsed.payments) &&
       parsed.tariffs
     ) {
-      return parsed as BillingStoreState;
+      return {
+        ...(parsed as BillingStoreState),
+        notifications: Array.isArray(parsed.notifications) ? parsed.notifications : [],
+        mpesaTransactions: Array.isArray(parsed.mpesaTransactions) ? parsed.mpesaTransactions : [],
+        paybill:
+          parsed.paybill && typeof parsed.paybill.primaryPaybill === 'string'
+            ? parsed.paybill
+            : structuredClone(DEFAULT_PAYBILL_SETTINGS),
+      };
     }
   } catch {
     // Fall back to clean empty state

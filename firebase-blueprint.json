@@ -1,0 +1,355 @@
+{
+  "entities": {
+    "OperatorProfile": {
+      "title": "OperatorProfile",
+      "description": "Authenticated water utility user profile and server-enforced RBAC role.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID matching the document ID." },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["superadmin", "admin", "operator"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "role", "createdAt", "updatedAt"]
+    },
+    "StaffAccess": {
+      "title": "StaffAccess",
+      "description": "Super-admin managed RBAC allowlist mapping verified emails to superadmin, admin, or operator roles.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["superadmin", "admin", "operator"] },
+        "displayName": { "type": "string" },
+        "assignedByEmail": { "type": "string", "format": "email" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "role", "displayName", "assignedByEmail", "createdAt", "updatedAt"]
+    },
+    "WaterConnection": {
+      "title": "WaterConnection",
+      "description": "Metered water utility customer account and premise metadata.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "accountCode": { "type": "string" },
+        "customerName": { "type": "string" },
+        "premiseAddress": { "type": "string" },
+        "category": { "type": "string", "enum": ["Residents", "Heavy Clients"] },
+        "meterSerial": { "type": "string" },
+        "status": { "type": "string", "enum": ["Active", "Suspended"] },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "lastReadingTenthsM3": { "type": "integer" },
+        "lastReadCycle": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "accountCode",
+        "customerName",
+        "premiseAddress",
+        "category",
+        "meterSerial",
+        "status",
+        "phone",
+        "email",
+        "lastReadingTenthsM3",
+        "lastReadCycle",
+        "updatedAt"
+      ]
+    },
+    "MeterReading": {
+      "title": "MeterReading",
+      "description": "Recorded cumulative meter reading with optional meter dial verification photo.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "connectionId": { "type": "string" },
+        "cycleId": { "type": "string" },
+        "readDate": { "type": "object" },
+        "previousTenthsM3": { "type": "integer" },
+        "currentTenthsM3": { "type": "integer" },
+        "consumptionTenthsM3": { "type": "integer" },
+        "readerInitials": { "type": "string" },
+        "anomalyNote": { "type": "string" },
+        "isSpikeFlagged": { "type": "boolean" },
+        "photoUrl": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "connectionId",
+        "cycleId",
+        "readDate",
+        "previousTenthsM3",
+        "currentTenthsM3",
+        "consumptionTenthsM3",
+        "readerInitials",
+        "isSpikeFlagged",
+        "updatedAt"
+      ]
+    },
+    "WaterInvoice": {
+      "title": "WaterInvoice",
+      "description": "Issued monthly water utility bill and payment balance tracking.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "connectionId": { "type": "string" },
+        "cycleId": { "type": "string" },
+        "readingId": { "type": "string" },
+        "issueDate": { "type": "object" },
+        "dueDate": { "type": "object" },
+        "previousTenthsM3": { "type": "integer" },
+        "currentTenthsM3": { "type": "integer" },
+        "consumptionTenthsM3": { "type": "integer" },
+        "ratePerM3": { "type": "number" },
+        "volumetricKsh": { "type": "number" },
+        "sewerageKsh": { "type": "number" },
+        "arrearsBroughtForwardKsh": { "type": "number" },
+        "cycleChargesKsh": { "type": "number" },
+        "totalPayableKsh": { "type": "number" },
+        "amountPaidKsh": { "type": "number" },
+        "status": { "type": "string", "enum": ["Paid", "Pending", "Overdue"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "invoiceNumber",
+        "connectionId",
+        "cycleId",
+        "readingId",
+        "issueDate",
+        "dueDate",
+        "previousTenthsM3",
+        "currentTenthsM3",
+        "consumptionTenthsM3",
+        "ratePerM3",
+        "volumetricKsh",
+        "sewerageKsh",
+        "arrearsBroughtForwardKsh",
+        "cycleChargesKsh",
+        "totalPayableKsh",
+        "amountPaidKsh",
+        "status",
+        "updatedAt"
+      ]
+    },
+    "PaymentRecord": {
+      "title": "PaymentRecord",
+      "description": "Confirmed payment receipt applied to a water utility invoice.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "invoiceId": { "type": "string" },
+        "paidDate": { "type": "object" },
+        "amountKsh": { "type": "number" },
+        "method": { "type": "string" },
+        "reference": { "type": "string" },
+        "status": { "type": "string", "enum": ["Completed", "Pending", "Failed"] },
+        "connectionId": { "type": "string" },
+        "accountCode": { "type": "string" },
+        "billRefNumber": { "type": "string" },
+        "msisdn": { "type": "string" },
+        "shortCode": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "invoiceId", "paidDate", "amountKsh", "method", "reference", "updatedAt"]
+    },
+    "TariffSettings": {
+      "title": "TariffSettings",
+      "description": "Configured volumetric tariff rates for Residents and Heavy Clients.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string" },
+        "residentsRatePerM3": { "type": "number" },
+        "residentsSeweragePercent": { "type": "number" },
+        "heavyRatePerM3": { "type": "number" },
+        "heavySeweragePercent": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "residentsRatePerM3",
+        "residentsSeweragePercent",
+        "heavyRatePerM3",
+        "heavySeweragePercent",
+        "updatedAt"
+      ]
+    },
+    "PaybillSettings": {
+      "title": "PaybillSettings",
+      "description": "Editable Lipa na M-Pesa Paybill business numbers and account label for receipts and C2B matching.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string" },
+        "primaryPaybill": { "type": "string" },
+        "alternatePaybill": { "type": "string" },
+        "businessName": { "type": "string" },
+        "accountLabel": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "primaryPaybill",
+        "businessName",
+        "accountLabel",
+        "updatedAt"
+      ]
+    },
+    "NotificationLog": {
+      "title": "NotificationLog",
+      "description": "Historical dispatch audit log for SMS, Email, and WhatsApp customer notifications.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "connectionId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "accountCode": { "type": "string" },
+        "invoiceId": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "channel": { "type": "string", "enum": ["SMS", "EMAIL", "WHATSAPP"] },
+        "recipient": { "type": "string" },
+        "messageSummary": { "type": "string" },
+        "status": { "type": "string", "enum": ["Delivered", "Sent", "Pending", "Failed"] },
+        "sentDate": { "type": "object" },
+        "sentTime": { "type": "string" },
+        "dispatchedBy": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "connectionId",
+        "customerName",
+        "accountCode",
+        "channel",
+        "recipient",
+        "messageSummary",
+        "status",
+        "sentDate",
+        "sentTime",
+        "dispatchedBy",
+        "updatedAt"
+      ]
+    },
+    "MpesaTransaction": {
+      "title": "MpesaTransaction",
+      "description": "Confirmed M-Pesa C2B Paybill callback log and ledger reconciliation receipt.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "transId": { "type": "string" },
+        "transTime": { "type": "string" },
+        "transAmount": { "type": "number" },
+        "businessShortCode": { "type": "string" },
+        "billRefNumber": { "type": "string" },
+        "msisdn": { "type": "string" },
+        "customerName": { "type": "string" },
+        "connectionId": { "type": "string" },
+        "accountCode": { "type": "string" },
+        "appliedAmountKsh": { "type": "number" },
+        "unallocatedKsh": { "type": "number" },
+        "status": { "type": "string", "enum": ["Completed", "Unmatched", "Failed"] },
+        "receivedAt": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "transId",
+        "transTime",
+        "transAmount",
+        "businessShortCode",
+        "billRefNumber",
+        "msisdn",
+        "customerName",
+        "appliedAmountKsh",
+        "unallocatedKsh",
+        "status",
+        "receivedAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/OperatorProfile" },
+      "description": "Authenticated user profile document with server-validated role."
+    },
+    "/staffAccess/{email}": {
+      "schema": { "$ref": "#/entities/StaffAccess" },
+      "description": "Super-admin managed role assignments keyed by normalized lowercase email."
+    },
+    "/workspaces/{workspaceId}/connections/{connectionId}": {
+      "schema": { "$ref": "#/entities/WaterConnection" },
+      "description": "Shared utility workspace metered customer connections for Admins and Super Admins."
+    },
+    "/workspaces/{workspaceId}/readings/{readingId}": {
+      "schema": { "$ref": "#/entities/MeterReading" },
+      "description": "Shared utility workspace meter readings with optional dial photos."
+    },
+    "/workspaces/{workspaceId}/invoices/{invoiceId}": {
+      "schema": { "$ref": "#/entities/WaterInvoice" },
+      "description": "Shared utility workspace water utility invoices."
+    },
+    "/workspaces/{workspaceId}/payments/{paymentId}": {
+      "schema": { "$ref": "#/entities/PaymentRecord" },
+      "description": "Shared utility workspace confirmed payment receipts."
+    },
+    "/workspaces/{workspaceId}/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/TariffSettings" },
+      "description": "Shared utility workspace billing tariff settings."
+    },
+    "/workspaces/{workspaceId}/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/NotificationLog" },
+      "description": "Shared utility workspace SMS, Email, and WhatsApp dispatch history."
+    },
+    "/workspaces/{workspaceId}/mpesaTransactions/{transId}": {
+      "schema": { "$ref": "#/entities/MpesaTransaction" },
+      "description": "Shared utility workspace M-Pesa C2B Paybill webhook transactions and receipts."
+    },
+    "/users/{userId}/connections/{connectionId}": {
+      "schema": { "$ref": "#/entities/WaterConnection" },
+      "description": "Operator-scoped metered customer connection accounts."
+    },
+    "/users/{userId}/readings/{readingId}": {
+      "schema": { "$ref": "#/entities/MeterReading" },
+      "description": "Operator-scoped meter readings with optional dial verification photos."
+    },
+    "/users/{userId}/invoices/{invoiceId}": {
+      "schema": { "$ref": "#/entities/WaterInvoice" },
+      "description": "Operator-scoped monthly water utility invoices."
+    },
+    "/users/{userId}/payments/{paymentId}": {
+      "schema": { "$ref": "#/entities/PaymentRecord" },
+      "description": "Operator-scoped confirmed payment receipts."
+    },
+    "/users/{userId}/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/TariffSettings" },
+      "description": "Operator-scoped billing tariff settings (e.g. tariffs)."
+    },
+    "/users/{userId}/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/NotificationLog" },
+      "description": "Operator-scoped SMS, Email, and WhatsApp dispatch history."
+    },
+    "/users/{userId}/mpesaTransactions/{transId}": {
+      "schema": { "$ref": "#/entities/MpesaTransaction" },
+      "description": "Operator-scoped M-Pesa C2B Paybill webhook transactions and receipts."
+    }
+  }
+}

@@ -1,31 +1,35 @@
 import React, { useMemo, useState } from 'react';
-import { WaterConnection, WaterInvoice } from '../types/billing';
-import { formatCents, formatLocalDate } from '../lib/billingMath';
+import { PaybillSettings, WaterConnection, WaterInvoice } from '../types/billing';
+import {
+  buildWhatsAppUrl,
+  DEFAULT_PAYBILL_NUMBER,
+  formatCents,
+  formatLocalDate,
+} from '../lib/billingMath';
 import { getOverdueAccounts, OverdueAccountSummary } from '../lib/overdueAccounts';
-import { Button, ModalDialog, Surface } from './ui';
-import { AlertCircle, Check, Mail, MessageSquare, Send } from 'lucide-react';
+import { Button, ModalDialog } from './ui';
+import { Check, ExternalLink, Mail, MessageSquare, Send } from 'lucide-react';
+
+export type OverdueDispatchChannel = 'EMAIL' | 'SMS' | 'BOTH' | 'WHATSAPP';
+
+export interface OverdueNotificationPayload {
+  connectionId: string;
+  customerName: string;
+  accountCode: string;
+  channel: OverdueDispatchChannel;
+  contact: string;
+  balanceCents: number;
+  invoiceCount: number;
+}
 
 export interface OverdueAccountsModalProps {
   open: boolean;
   onClose: () => void;
   connections: WaterConnection[];
   invoices: WaterInvoice[];
-  onTriggerNotification: (opts: {
-    connectionId: string;
-    customerName: string;
-    channel: 'EMAIL' | 'SMS' | 'BOTH';
-    contact: string;
-    balanceCents: number;
-    invoiceCount: number;
-  }) => void;
-  onBatchTriggerNotification?: (notifications: {
-    connectionId: string;
-    customerName: string;
-    channel: 'EMAIL' | 'SMS' | 'BOTH';
-    contact: string;
-    balanceCents: number;
-    invoiceCount: number;
-  }[]) => void;
+  paybill?: PaybillSettings;
+  onTriggerNotification: (opts: OverdueNotificationPayload) => void;
+  onBatchTriggerNotification?: (notifications: OverdueNotificationPayload[]) => void;
   onOpenInvoice?: (invoiceId: string) => void;
 }
 
@@ -34,11 +38,11 @@ export function OverdueAccountsModal({
   onClose,
   connections,
   invoices,
+  paybill,
   onTriggerNotification,
   onBatchTriggerNotification,
-  onOpenInvoice,
 }: OverdueAccountsModalProps) {
-  const [selectedChannel, setSelectedChannel] = useState<'BOTH' | 'EMAIL' | 'SMS'>('BOTH');
+  const [selectedChannel, setSelectedChannel] = useState<OverdueDispatchChannel>('BOTH');
   const [notifiedAccountIds, setNotifiedAccountIds] = useState<Set<string>>(new Set());
 
   // Aggregate flagged overdue accounts
@@ -50,19 +54,39 @@ export function OverdueAccountsModal({
     return overdueAccounts.reduce((sum, item) => sum + item.totalOverdueBalanceCents, 0);
   }, [overdueAccounts]);
 
-  const handleSendSingle = (account: OverdueAccountSummary) => {
-    const contact =
-      selectedChannel === 'EMAIL'
-        ? account.connection.email
-        : selectedChannel === 'SMS'
-        ? account.connection.phone
-        : `${account.connection.email} & ${account.connection.phone}`;
+  const getContactForChannel = (
+    account: OverdueAccountSummary,
+    channel: OverdueDispatchChannel
+  ) => {
+    if (channel === 'EMAIL') return account.connection.email;
+    if (channel === 'SMS' || channel === 'WHATSAPP') return account.connection.phone;
+    return `${account.connection.email} & ${account.connection.phone}`;
+  };
 
+  const buildOverdueWaMessage = (account: OverdueAccountSummary) => {
+    const activePaybill = paybill?.primaryPaybill?.trim() || DEFAULT_PAYBILL_NUMBER;
+    const accountLabel = paybill?.accountLabel?.trim() || 'Account';
+    return `Dear ${account.connection.customerName},
+
+URGENT ARREARS NOTICE — MajiTrack (Gawanji Heights Apartments)
+• Account Code: ${account.connection.accountCode}
+• Premise: ${account.connection.premiseAddress}
+• Overdue Bills: ${account.overdueCount} (Earliest due ${formatLocalDate(account.oldestDueDate)})
+• Total Overdue Balance: ${formatCents(account.totalOverdueBalanceCents)}
+
+Please pay via Lipa na M-Pesa Paybill ${activePaybill}, ${accountLabel} ${account.connection.accountCode}.
+
+Thank you,
+MajiTrack Water Billing`;
+  };
+
+  const handleSendSingle = (account: OverdueAccountSummary) => {
     onTriggerNotification({
       connectionId: account.connection.id,
       customerName: account.connection.customerName,
+      accountCode: account.connection.accountCode,
       channel: selectedChannel,
-      contact,
+      contact: getContactForChannel(account, selectedChannel),
       balanceCents: account.totalOverdueBalanceCents,
       invoiceCount: account.overdueCount,
     });
@@ -81,13 +105,9 @@ export function OverdueAccountsModal({
         pendingList.map((account) => ({
           connectionId: account.connection.id,
           customerName: account.connection.customerName,
+          accountCode: account.connection.accountCode,
           channel: selectedChannel,
-          contact:
-            selectedChannel === 'EMAIL'
-              ? account.connection.email
-              : selectedChannel === 'SMS'
-              ? account.connection.phone
-              : `${account.connection.email} & ${account.connection.phone}`,
+          contact: getContactForChannel(account, selectedChannel),
           balanceCents: account.totalOverdueBalanceCents,
           invoiceCount: account.overdueCount,
         }))
@@ -114,18 +134,19 @@ export function OverdueAccountsModal({
       <div className="space-y-4">
         {/* Controls Bar: Channel Toggle and Send All */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/35 pb-3">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="text-caption font-semibold uppercase tracking-wider text-muted">
               Dispatch channel:
             </span>
             <div
               role="group"
               aria-label="Notification delivery channel"
-              className="inline-flex rounded-control border border-border/45 bg-background p-0.5"
+              className="inline-flex flex-wrap rounded-control border border-border/45 bg-background p-0.5"
             >
               {(
                 [
                   { id: 'BOTH', label: 'Email & SMS' },
+                  { id: 'WHATSAPP', label: 'WhatsApp only' },
                   { id: 'EMAIL', label: 'Email only' },
                   { id: 'SMS', label: 'SMS only' },
                 ] as const
@@ -136,7 +157,9 @@ export function OverdueAccountsModal({
                   onClick={() => setSelectedChannel(ch.id)}
                   className={`min-h-7 cursor-pointer whitespace-nowrap rounded-control px-2.5 text-caption font-medium transition-colors focus-visible:outline-2 focus-visible:outline-primary ${
                     selectedChannel === ch.id
-                      ? 'bg-surface text-foreground shadow-surface'
+                      ? ch.id === 'WHATSAPP'
+                        ? 'bg-[#25D366] text-white shadow-surface'
+                        : 'bg-surface text-foreground shadow-surface'
                       : 'text-muted hover:text-foreground'
                   }`}
                 >
@@ -155,7 +178,9 @@ export function OverdueAccountsModal({
             >
               <Send className="size-3.5" />
               {notifiedAccountIds.size >= overdueAccounts.length
-                ? 'All notifications dispatched'
+                ? 'All notifications logged'
+                : selectedChannel === 'WHATSAPP'
+                ? `Log all WhatsApp (${overdueAccounts.length})`
                 : `Dispatch notice to all (${overdueAccounts.length})`}
             </Button>
           )}
@@ -175,7 +200,7 @@ export function OverdueAccountsModal({
               <thead>
                 <tr className="border-b border-border/35 text-caption font-semibold uppercase tracking-wider text-muted">
                   <th className="px-4 py-2.5">Customer / Account</th>
-                  <th className="px-4 py-2.5">Zone & Contact</th>
+                  <th className="px-4 py-2.5">Contact</th>
                   <th className="px-4 py-2.5 text-right">Overdue Invoices</th>
                   <th className="px-4 py-2.5 text-right">Total Balance</th>
                   <th className="px-4 py-2.5 text-right">Action</th>
@@ -184,6 +209,10 @@ export function OverdueAccountsModal({
               <tbody className="divide-y divide-border/30 text-body">
                 {overdueAccounts.map((item) => {
                   const isNotified = notifiedAccountIds.has(item.connection.id);
+                  const waUrl = buildWhatsAppUrl(
+                    item.connection.phone,
+                    buildOverdueWaMessage(item)
+                  );
 
                   return (
                     <tr
@@ -200,11 +229,13 @@ export function OverdueAccountsModal({
                         </div>
                       </td>
 
-                      {/* Zone & Contact Info */}
+                      {/* Contact Info */}
                       <td className="px-4 py-3 text-caption">
-                        <div className="text-foreground">{item.connection.zone}</div>
-                        <div className="text-muted truncate max-w-44" title={`${item.connection.email} · ${item.connection.phone}`}>
-                          {selectedChannel === 'SMS'
+                        <div
+                          className="text-foreground truncate max-w-44"
+                          title={`${item.connection.email} · ${item.connection.phone}`}
+                        >
+                          {selectedChannel === 'SMS' || selectedChannel === 'WHATSAPP'
                             ? item.connection.phone
                             : selectedChannel === 'EMAIL'
                             ? item.connection.email
@@ -232,31 +263,46 @@ export function OverdueAccountsModal({
 
                       {/* Trigger Notification Button */}
                       <td className="px-4 py-3 text-right">
-                        <Button
-                          tone={isNotified ? 'quiet' : 'danger'}
-                          size="sm"
-                          onClick={() => handleSendSingle(item)}
-                          disabled={isNotified}
-                          title={`Send ${selectedChannel} overdue reminder to ${item.connection.customerName}`}
-                        >
-                          {isNotified ? (
-                            <>
-                              <Check className="size-3.5 text-accent" />
-                              Notice sent
-                            </>
-                          ) : (
-                            <>
-                              {selectedChannel === 'EMAIL' ? (
-                                <Mail className="size-3.5" />
-                              ) : selectedChannel === 'SMS' ? (
-                                <MessageSquare className="size-3.5" />
-                              ) : (
-                                <Send className="size-3.5" />
-                              )}
-                              Send notice
-                            </>
-                          )}
-                        </Button>
+                        {selectedChannel === 'WHATSAPP' && !isNotified ? (
+                          <a
+                            href={waUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() => handleSendSingle(item)}
+                            className="inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-control bg-[#25D366] px-3 text-caption font-semibold text-white shadow-xs transition-all hover:brightness-105 focus-visible:outline-2 focus-visible:outline-[#25D366]"
+                            title={`Send WhatsApp-only arrears notice to ${item.connection.customerName}`}
+                          >
+                            <MessageSquare className="size-3.5 fill-current" />
+                            <span>WhatsApp</span>
+                            <ExternalLink className="size-3" />
+                          </a>
+                        ) : (
+                          <Button
+                            tone={isNotified ? 'quiet' : 'danger'}
+                            size="sm"
+                            onClick={() => handleSendSingle(item)}
+                            disabled={isNotified}
+                            title={`Send ${selectedChannel} overdue reminder to ${item.connection.customerName}`}
+                          >
+                            {isNotified ? (
+                              <>
+                                <Check className="size-3.5 text-accent" />
+                                Notice logged
+                              </>
+                            ) : (
+                              <>
+                                {selectedChannel === 'EMAIL' ? (
+                                  <Mail className="size-3.5" />
+                                ) : selectedChannel === 'SMS' ? (
+                                  <MessageSquare className="size-3.5" />
+                                ) : (
+                                  <Send className="size-3.5" />
+                                )}
+                                Send notice
+                              </>
+                            )}
+                          </Button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -268,7 +314,7 @@ export function OverdueAccountsModal({
 
         <div className="flex items-center justify-between pt-2">
           <p className="text-caption text-muted">
-            Notifications include the total outstanding balance, invoice IDs, and electronic payment links.
+            All dispatched reminders are automatically recorded in the Invoices & Ledger notification history.
           </p>
           <Button tone="quiet" size="sm" onClick={onClose}>
             Close

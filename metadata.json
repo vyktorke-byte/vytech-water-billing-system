@@ -1,6 +1,6 @@
 {
   "name": "Vytech Water Billing",
   "description": "Municipal and estate water billing system with progressive block tariffs, meter reading capture, invoice ledger, and payment reconciliation.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

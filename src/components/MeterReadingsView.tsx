@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   BillingStoreState,
   ConnectionStatus,
-  SupplyZone,
 } from '../types/billing';
 import {
   ACTIVE_CYCLE_ID,
@@ -14,8 +13,9 @@ import {
   formatTenthsM3Plain,
   parseM3InputToTenths,
 } from '../lib/billingMath';
-import { Button, Field, Surface } from './ui';
-import { ArrowLeft, Search } from 'lucide-react';
+import { Button, Field, ModalDialog, Surface } from './ui';
+import { ArrowLeft, Camera, Search } from 'lucide-react';
+import { MeterCameraCapture } from './MeterCameraCapture';
 
 interface MeterReadingsViewProps {
   state: BillingStoreState;
@@ -25,7 +25,9 @@ interface MeterReadingsViewProps {
     connectionId: string;
     currentTenthsM3: number;
     anomalyNote?: string;
+    photoUrl?: string;
   }) => void;
+  onUpdateReadingPhoto: (readingId: string, photoUrl: string | undefined) => void;
   onOpenInvoice: (invoiceId: string) => void;
 }
 
@@ -36,17 +38,19 @@ export function MeterReadingsView({
   selectedConnectionId,
   onSelectConnection,
   onSubmitReadingAndBill,
+  onUpdateReadingPhoto,
   onOpenInvoice,
 }: MeterReadingsViewProps) {
   const [filterMode, setFilterMode] = useState<ReadingFilter>('UNBILLED');
-  const [zoneFilter, setZoneFilter] = useState<SupplyZone | 'ALL'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
 
   // Reading form inputs
   const [readingInput, setReadingInput] = useState('');
   const [noteInput, setNoteInput] = useState('');
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [formError, setFormError] = useState('');
+  const [viewingHistoryPhoto, setViewingHistoryPhoto] = useState<string | null>(null);
 
   const novReadingByConn = useMemo(() => {
     const map = new Map<string, (typeof state.readings)[number]>();
@@ -88,7 +92,6 @@ export function MeterReadingsView({
   const filteredConnections = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return state.connections.filter((c) => {
-      if (zoneFilter !== 'ALL' && c.zone !== zoneFilter) return false;
       const novR = novReadingByConn.get(c.id);
       if (filterMode === 'UNBILLED' && (novR || c.status !== ConnectionStatus.Active)) return false;
       if (filterMode === 'READ_NOV' && !novR) return false;
@@ -99,7 +102,7 @@ export function MeterReadingsView({
       }
       return true;
     });
-  }, [state.connections, zoneFilter, filterMode, searchQuery, novReadingByConn]);
+  }, [state.connections, filterMode, searchQuery, novReadingByConn]);
 
   const activeConnection = useMemo(() => {
     if (selectedConnectionId) {
@@ -137,6 +140,7 @@ export function MeterReadingsView({
       const suggested = activeConnection.lastReadingTenthsM3 + trailingAvgTenths;
       setReadingInput(formatTenthsM3Plain(suggested).replace(/,/g, ''));
       setNoteInput('');
+      setPhotoUrl(null);
       setFormError('');
     }
   }, [activeConnection, novReadingByConn, trailingAvgTenths]);
@@ -206,7 +210,9 @@ export function MeterReadingsView({
       connectionId: activeConnection.id,
       currentTenthsM3: livePreview.currentTenthsM3,
       anomalyNote: noteInput.trim() || undefined,
+      photoUrl: photoUrl || undefined,
     });
+    setPhotoUrl(null);
   };
 
   const filterChips: { id: ReadingFilter; label: string; count: number }[] = [
@@ -256,18 +262,6 @@ export function MeterReadingsView({
               className="min-h-10 w-full rounded-control border border-border/55 bg-surface pr-3 pl-9 text-label text-foreground placeholder:text-muted/75 focus-visible:outline-2 focus-visible:outline-primary"
             />
           </div>
-
-          <select
-            aria-label="Filter meters by supply zone"
-            value={zoneFilter}
-            onChange={(e) => setZoneFilter(e.target.value as SupplyZone | 'ALL')}
-            className="min-h-10 rounded-control border border-border/55 bg-surface px-3 text-label text-foreground focus-visible:outline-2 focus-visible:outline-primary"
-          >
-            <option value="ALL">All supply zones</option>
-            <option value={SupplyZone.OldBuilding}>{SupplyZone.OldBuilding}</option>
-            <option value={SupplyZone.NewBuilding}>{SupplyZone.NewBuilding}</option>
-            <option value={SupplyZone.HeavyConsumer}>{SupplyZone.HeavyConsumer}</option>
-          </select>
         </div>
       </div>
 
@@ -286,7 +280,7 @@ export function MeterReadingsView({
                   : 'No meters match this filter'}
               </p>
               <p className="mt-1 text-caption text-muted">
-                Switch to Read & billed or All meters to inspect recorded meter indices and spike checks.
+                Switch to Read & billed or All meters to inspect recorded meter indices, capture dial photos, and check spikes.
               </p>
               <div className="mt-4">
                 <Button tone="quiet" size="sm" onClick={() => setFilterMode('ALL')}>
@@ -326,7 +320,7 @@ export function MeterReadingsView({
                           <div className="font-medium text-foreground">{conn.customerName}</div>
                           <div className="mt-0.5 text-caption text-muted">
                             <span className="font-mono text-foreground/85">{conn.meterSerial}</span>
-                            {` · ${conn.category} · ${conn.zone}`}
+                            {` · ${conn.category}`}
                           </div>
                         </td>
                         <td className="px-4 py-3.5 text-right tabular-nums text-foreground">
@@ -344,8 +338,16 @@ export function MeterReadingsView({
                               >
                                 {formatTenthsM3(novR.consumptionTenthsM3)}
                               </span>
-                              <div className="text-caption text-muted">
-                                {novR.isSpikeFlagged ? 'Spike flagged' : 'Billed'}
+                              <div className="flex items-center justify-end gap-1 text-caption text-muted">
+                                <span>{novR.isSpikeFlagged ? 'Spike flagged' : 'Billed'}</span>
+                                {novR.photoUrl ? (
+                                  <span
+                                    className="inline-flex items-center gap-0.5 text-primary"
+                                    title="Dial photo attached"
+                                  >
+                                    · <Camera className="size-3" />
+                                  </span>
+                                ) : null}
                               </div>
                             </div>
                           ) : (
@@ -399,7 +401,7 @@ export function MeterReadingsView({
                 </div>
                 <h2 className="text-section text-foreground">{activeConnection.customerName}</h2>
                 <p className="text-caption text-muted">
-                  {`${activeConnection.premiseAddress} · ${activeConnection.zone} · ${activeConnection.category}`}
+                  {`${activeConnection.premiseAddress} · ${activeConnection.category}`}
                 </p>
               </div>
 
@@ -471,6 +473,17 @@ export function MeterReadingsView({
                       value={noteInput}
                       onChange={(e) => setNoteInput(e.target.value)}
                     />
+
+                    {/* Camera Access & Meter Dial Photo Capture */}
+                    <div className="border-t border-border/30 pt-3">
+                      <MeterCameraCapture
+                        photoUrl={photoUrl}
+                        onPhotoCaptured={setPhotoUrl}
+                        onPhotoCleared={() => setPhotoUrl(null)}
+                        meterSerial={activeConnection.meterSerial}
+                        premise={activeConnection.premiseAddress}
+                      />
+                    </div>
                   </div>
 
                   {/* Live Bill Calculation Preview */}
@@ -544,7 +557,7 @@ export function MeterReadingsView({
                 </form>
               ) : (
                 <div className="divide-y divide-border/35">
-                  <div className="space-y-2.5 px-5 py-4">
+                  <div className="space-y-3 px-5 py-4">
                     <div className="flex items-center justify-between">
                       <span className="text-caption font-medium text-accent">
                         November 2026 reading posted
@@ -585,8 +598,22 @@ export function MeterReadingsView({
                       </p>
                     ) : null}
 
+                    {/* Take / Attach / Retake Meter Dial Photo on Existing Reading */}
+                    <div className="border-t border-border/30 pt-3">
+                      <MeterCameraCapture
+                        photoUrl={activeNovReading.photoUrl ?? null}
+                        onPhotoCaptured={(capturedUrl) =>
+                          onUpdateReadingPhoto(activeNovReading.id, capturedUrl)
+                        }
+                        onPhotoCleared={() => onUpdateReadingPhoto(activeNovReading.id, undefined)}
+                        meterSerial={activeConnection.meterSerial}
+                        premise={activeConnection.premiseAddress}
+                        title="Nov 2026 Meter Dial Photo"
+                      />
+                    </div>
+
                     {activeNovInvoice ? (
-                      <div className="pt-2">
+                      <div className="pt-1">
                         <Button
                           tone="quiet"
                           size="sm"
@@ -613,11 +640,22 @@ export function MeterReadingsView({
                       key={r.id}
                       className="flex items-center justify-between gap-2 py-2 text-caption"
                     >
-                      <span className="text-muted">
+                      <span className="text-muted flex items-center gap-1.5">
                         <span className="font-medium text-foreground">{r.cycleId}</span>
                         {` · ${formatTenthsM3Plain(r.previousTenthsM3)} → ${formatTenthsM3Plain(
                           r.currentTenthsM3
                         )} m³`}
+                        {r.photoUrl ? (
+                          <button
+                            type="button"
+                            onClick={() => setViewingHistoryPhoto(r.photoUrl!)}
+                            className="inline-flex cursor-pointer items-center gap-1 text-[11px] text-primary hover:underline ml-1"
+                            title="View attached meter dial photo for this reading"
+                          >
+                            <Camera className="size-3" />
+                            <span>Photo</span>
+                          </button>
+                        ) : null}
                       </span>
                       <span
                         className={`tabular-nums font-medium ${
@@ -634,6 +672,33 @@ export function MeterReadingsView({
           ) : null}
         </div>
       </div>
+
+      {/* Meter Photo Full View Modal */}
+      {viewingHistoryPhoto ? (
+        <ModalDialog
+          open={Boolean(viewingHistoryPhoto)}
+          onClose={() => setViewingHistoryPhoto(null)}
+          title="Verified Meter Dial Photo"
+          subtitle={activeConnection ? `${activeConnection.customerName} · Meter ${activeConnection.meterSerial}` : 'Register Proof'}
+          maxWidthClass="max-w-2xl"
+        >
+          <div className="space-y-4">
+            <div className="overflow-hidden rounded-control border border-border/50 bg-black flex items-center justify-center max-h-[70vh]">
+              <img
+                src={viewingHistoryPhoto}
+                alt="Meter Dial Reading"
+                className="max-h-[70vh] w-auto object-contain"
+              />
+            </div>
+            <div className="flex items-center justify-between text-caption text-muted">
+              <span>MajiTrack Water Billing · Official cumulative register verification photo</span>
+              <Button tone="quiet" size="sm" onClick={() => setViewingHistoryPhoto(null)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </ModalDialog>
+      ) : null}
     </div>
   );
 }

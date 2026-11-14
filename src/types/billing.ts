@@ -3,12 +3,6 @@ export enum TariffCategory {
   HeavyClients = 'Heavy Clients',
 }
 
-export enum SupplyZone {
-  OldBuilding = 'Old Building',
-  NewBuilding = 'New Building',
-  HeavyConsumer = 'Heavy Consumer',
-}
-
 export enum ConnectionStatus {
   Active = 'Active',
   Suspended = 'Suspended',
@@ -21,6 +15,7 @@ export enum InvoiceStatus {
 }
 
 export enum PaymentMethod {
+  MpesaPaybill = 'M-Pesa Paybill',
   Mpesa = 'M-Pesa',
   BankTransfer = 'Bank transfer',
   Card = 'Card terminal',
@@ -59,7 +54,6 @@ export interface WaterConnection {
   accountCode: string;
   customerName: string;
   premiseAddress: string;
-  zone: SupplyZone;
   category: TariffCategory;
   meterSerial: string;
   status: ConnectionStatus;
@@ -84,7 +78,11 @@ export interface MeterReading {
   readerInitials: string;
   anomalyNote?: string;
   isSpikeFlagged: boolean;
+  /** Attached photo data URL of the physical meter dial for visual proof */
+  photoUrl?: string;
 }
+
+export type PaymentStatus = 'Completed' | 'Pending' | 'Failed';
 
 export interface PaymentRecord {
   id: string;
@@ -93,6 +91,31 @@ export interface PaymentRecord {
   amountKsh: number;
   method: PaymentMethod;
   reference: string;
+  status?: PaymentStatus;
+  connectionId?: string;
+  accountCode?: string;
+  billRefNumber?: string;
+  msisdn?: string;
+  shortCode?: string;
+}
+
+export interface MpesaC2BTransaction {
+  id: string;
+  transId: string;
+  transTime: string;
+  transAmount: number;
+  businessShortCode: string;
+  billRefNumber: string;
+  msisdn: string;
+  customerName: string;
+  connectionId?: string;
+  accountCode?: string;
+  matchedInvoiceIds: string[];
+  appliedAmountKsh: number;
+  unallocatedKsh: number;
+  status: 'Completed' | 'Unmatched' | 'Failed';
+  receivedAt: string;
+  reconciled?: boolean;
 }
 
 export interface WaterInvoice {
@@ -118,6 +141,33 @@ export interface WaterInvoice {
   status: InvoiceStatus;
 }
 
+export type NotificationChannel = 'SMS' | 'EMAIL' | 'WHATSAPP';
+
+export type NotificationStatus = 'Delivered' | 'Sent' | 'Pending' | 'Failed';
+
+export interface NotificationLog {
+  id: string;
+  connectionId: string;
+  customerName: string;
+  accountCode: string;
+  invoiceId?: string;
+  invoiceNumber?: string;
+  channel: NotificationChannel;
+  recipient: string;
+  messageSummary: string;
+  status: NotificationStatus;
+  sentDate: { year: number; month: number; day: number };
+  sentTime: string;
+  dispatchedBy: string;
+}
+
+export interface PaybillSettings {
+  primaryPaybill: string;
+  alternatePaybill?: string;
+  businessName: string;
+  accountLabel: string;
+}
+
 export interface BillingStoreState {
   version: number;
   connections: WaterConnection[];
@@ -125,9 +175,29 @@ export interface BillingStoreState {
   invoices: WaterInvoice[];
   payments: PaymentRecord[];
   tariffs: Record<TariffCategory, TariffSchedule>;
+  notifications: NotificationLog[];
+  mpesaTransactions?: MpesaC2BTransaction[];
+  paybill?: PaybillSettings;
 }
 
-export type AppView = 'overview' | 'invoices' | 'readings' | 'accounts' | 'tariffs';
+export type AppView = 'overview' | 'invoices' | 'readings' | 'accounts' | 'tariffs' | 'admin';
+
+export type UserRole = 'superadmin' | 'admin' | 'operator';
+
+export interface StaffAccessEntry {
+  email: string;
+  role: UserRole;
+  displayName: string;
+  assignedByEmail: string;
+}
+
+export interface OperatorProfile {
+  uid: string;
+  email: string;
+  displayName: string;
+  photoURL?: string;
+  role: UserRole;
+}
 
 export interface StatusNotice {
   id: string;

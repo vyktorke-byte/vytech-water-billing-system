@@ -2,11 +2,11 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   BillingStoreState,
   ConnectionStatus,
-  SupplyZone,
   TariffCategory,
   WaterConnection,
 } from '../types/billing';
 import {
+  computeLifetimePaymentSummary,
   CYCLES,
   formatCents,
   formatTenthsM3,
@@ -14,15 +14,18 @@ import {
   parseM3InputToTenths,
 } from '../lib/billingMath';
 import { Button, Field, ModalDialog, SelectField, Surface } from './ui';
-import { ArrowLeft, Building2, Edit3, Plus, Search, Trash2, UserPlus, Zap } from 'lucide-react';
+import { ArrowLeft, Edit3, Plus, Search, Trash2, UserPlus } from 'lucide-react';
 import { UserHistoricalBillsTable } from './UserHistoricalBillsTable';
 
 interface AccountsViewProps {
   state: BillingStoreState;
   addModalOpen: boolean;
   onAddModalOpenChange: (open: boolean) => void;
-  onAddConnection: (conn: Omit<WaterConnection, 'id' | 'accountCode' | 'lastReadCycle'>) => void;
-  onBatchAddConnections?: (conns: Omit<WaterConnection, 'id' | 'accountCode' | 'lastReadCycle'>[]) => void;
+  onAddConnection: (
+    conn: Omit<WaterConnection, 'id' | 'accountCode' | 'lastReadCycle'> & {
+      accountCode?: string;
+    }
+  ) => void;
   onUpdateConnection: (
     id: string,
     patch: Partial<WaterConnection>
@@ -44,24 +47,23 @@ export function AccountsView({
   addModalOpen,
   onAddModalOpenChange,
   onAddConnection,
-  onBatchAddConnections,
   onUpdateConnection,
   onDeleteConnection,
   onOpenReadingsForConnection,
   onOpenInvoicesForConnection,
 }: AccountsViewProps) {
   const [categoryFilter, setCategoryFilter] = useState<TariffCategory | 'ALL'>('ALL');
-  const [zoneFilter, setZoneFilter] = useState<SupplyZone | 'ALL'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(state.connections[0]?.id ?? null);
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
 
   // Edit connection modal state
   const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editAccountCode, setEditAccountCode] = useState('');
   const [editName, setEditName] = useState('');
   const [editAddress, setEditAddress] = useState('');
-  const [editZone, setEditZone] = useState<SupplyZone>(SupplyZone.OldBuilding);
   const [editCategory, setEditCategory] = useState<TariffCategory>(TariffCategory.Residential);
+  const [editStatus, setEditStatus] = useState<ConnectionStatus>(ConnectionStatus.Active);
   const [editMeterSerial, setEditMeterSerial] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editEmail, setEditEmail] = useState('');
@@ -71,9 +73,9 @@ export function AccountsView({
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
   // Add connection form state
+  const [newAccountCode, setNewAccountCode] = useState('');
   const [newName, setNewName] = useState('');
   const [newAddress, setNewAddress] = useState('');
-  const [newZone, setNewZone] = useState<SupplyZone>(SupplyZone.OldBuilding);
   const [newCategory, setNewCategory] = useState<TariffCategory>(TariffCategory.Residential);
   const [newMeterSerial, setNewMeterSerial] = useState('MTR-84210');
   const [newInitialIndex, setNewInitialIndex] = useState('0.0');
@@ -81,44 +83,17 @@ export function AccountsView({
   const [newEmail, setNewEmail] = useState('');
   const [addError, setAddError] = useState('');
 
-  // Batch generate New Building rooms state
-  const [batchModalOpen, setBatchModalOpen] = useState(false);
-  const [batchFloorCount, setBatchFloorCount] = useState<number>(5);
-  const [batchRoomsPerFloor, setBatchRoomsPerFloor] = useState<number>(10);
-  const [batchTargetFloor, setBatchTargetFloor] = useState<string>('all'); // 'all' or '1'
-  const [batchCategory, setBatchCategory] = useState<TariffCategory>(TariffCategory.Residential);
-  const [batchMeterPrefix, setBatchMeterPrefix] = useState<string>('NB-');
-  const [batchInitialIndex, setBatchInitialIndex] = useState<string>('0.0');
-  const [batchError, setBatchError] = useState('');
-
-  // Batch generate Old Building rooms state (F1: A1, A6; F2: B1-B12, C1-C12, D1-D12, E1-E5)
-  const [oldBatchModalOpen, setOldBatchModalOpen] = useState(false);
-  const [oldBatchCategory, setOldBatchCategory] = useState<TariffCategory>(TariffCategory.Residential);
-  const [oldBatchMeterPrefix, setOldBatchMeterPrefix] = useState<string>('OB-');
-  const [oldBatchInitialIndex, setOldBatchInitialIndex] = useState<string>('0.0');
-  const [oldBatchFloorFilter, setOldBatchFloorFilter] = useState<'all' | 'F1' | 'F2'>('all');
-  const [oldBatchError, setOldBatchError] = useState('');
-
-  // Batch generate Heavy Consumer meters (F1 to F10)
-  const [heavyBatchModalOpen, setHeavyBatchModalOpen] = useState(false);
-  const [heavyBatchCount, setHeavyBatchCount] = useState<number>(10); // 10 meters (F1 to F10)
-  const [heavyBatchCategory, setHeavyBatchCategory] = useState<TariffCategory>(TariffCategory.HeavyClients);
-  const [heavyBatchMeterPrefix, setHeavyBatchMeterPrefix] = useState<string>('HM-');
-  const [heavyBatchInitialIndex, setHeavyBatchInitialIndex] = useState<string>('0.0');
-  const [heavyBatchError, setHeavyBatchError] = useState('');
-
   const filteredConnections = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return state.connections.filter((c) => {
       if (categoryFilter !== 'ALL' && c.category !== categoryFilter) return false;
-      if (zoneFilter !== 'ALL' && c.zone !== zoneFilter) return false;
       if (q) {
         const hay = `${c.customerName} ${c.accountCode} ${c.meterSerial} ${c.premiseAddress}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
-  }, [state.connections, categoryFilter, zoneFilter, searchQuery]);
+  }, [state.connections, categoryFilter, searchQuery]);
 
   const countsByCategory = useMemo(() => {
     let res = 0;
@@ -156,6 +131,15 @@ export function AccountsView({
     return map;
   }, [state.invoices]);
 
+  const lifetimeSummary = useMemo(() => computeLifetimePaymentSummary(state), [state]);
+  const lifetimeRowByConn = useMemo(
+    () => new Map(lifetimeSummary.rows.map((r) => [r.connection.id, r])),
+    [lifetimeSummary.rows]
+  );
+  const activeLifetimeRow = activeConnection
+    ? lifetimeRowByConn.get(activeConnection.id) ?? null
+    : null;
+
   const activeCycleBars = useMemo(() => {
     if (!activeConnection) return [];
     const byCycle = new Map<string, number>();
@@ -174,10 +158,11 @@ export function AccountsView({
   // Open Edit Modal with current active connection values
   const handleOpenEdit = () => {
     if (!activeConnection) return;
+    setEditAccountCode(activeConnection.accountCode);
     setEditName(activeConnection.customerName);
     setEditAddress(activeConnection.premiseAddress);
-    setEditZone(activeConnection.zone);
     setEditCategory(activeConnection.category);
+    setEditStatus(activeConnection.status);
     setEditMeterSerial(activeConnection.meterSerial);
     setEditPhone(activeConnection.phone);
     setEditEmail(activeConnection.email);
@@ -188,8 +173,19 @@ export function AccountsView({
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeConnection) return;
-    if (!editName.trim() || !editAddress.trim() || !editMeterSerial.trim()) {
-      setEditError('Customer name, premise address, and meter serial are required.');
+    const cleanAccountCode = editAccountCode.trim().toUpperCase();
+    if (!cleanAccountCode || !editName.trim() || !editAddress.trim() || !editMeterSerial.trim()) {
+      setEditError('Account reference code, customer name, premise address, and meter serial are required.');
+      return;
+    }
+
+    const duplicateAccount = state.connections.some(
+      (c) =>
+        c.id !== activeConnection.id &&
+        c.accountCode.toLowerCase() === cleanAccountCode.toLowerCase()
+    );
+    if (duplicateAccount) {
+      setEditError(`Account reference ${cleanAccountCode} is already assigned to another client.`);
       return;
     }
 
@@ -205,10 +201,11 @@ export function AccountsView({
     }
 
     onUpdateConnection(activeConnection.id, {
+      accountCode: cleanAccountCode,
       customerName: editName.trim(),
       premiseAddress: editAddress.trim(),
-      zone: editZone,
       category: editCategory,
+      status: editStatus,
       meterSerial: editMeterSerial.trim().toUpperCase(),
       phone: editPhone.trim() || '0712000000',
       email: editEmail.trim() || 'billing@example.com',
@@ -230,6 +227,16 @@ export function AccountsView({
       setAddError('Customer name, premise address, and meter serial are required.');
       return;
     }
+    const cleanAccount = newAccountCode.trim().toUpperCase();
+    if (cleanAccount) {
+      const duplicateAccount = state.connections.some(
+        (c) => c.accountCode.toLowerCase() === cleanAccount.toLowerCase()
+      );
+      if (duplicateAccount) {
+        setAddError(`Account reference ${cleanAccount} is already in use.`);
+        return;
+      }
+    }
     const tenths = parseM3InputToTenths(newInitialIndex);
     if (tenths === null) {
       setAddError('Enter a valid non-negative initial meter reading in m³.');
@@ -244,9 +251,9 @@ export function AccountsView({
     }
 
     onAddConnection({
+      accountCode: cleanAccount || undefined,
       customerName: newName.trim(),
       premiseAddress: newAddress.trim(),
-      zone: newZone,
       category: newCategory,
       meterSerial: newMeterSerial.trim().toUpperCase(),
       status: ConnectionStatus.Active,
@@ -255,6 +262,7 @@ export function AccountsView({
       lastReadingTenthsM3: tenths,
     });
 
+    setNewAccountCode('');
     setNewName('');
     setNewAddress('');
     setNewMeterSerial(`MTR-${Math.floor(84220 + Math.random() * 700)}`);
@@ -262,167 +270,6 @@ export function AccountsView({
     setNewEmail('');
     setAddError('');
     onAddModalOpenChange(false);
-  };
-
-  const handleBatchGenerateNewBuildingRooms = (e: React.FormEvent) => {
-    e.preventDefault();
-    const tenths = parseM3InputToTenths(batchInitialIndex);
-    if (tenths === null) {
-      setBatchError('Enter a valid non-negative initial meter index in m³.');
-      return;
-    }
-
-    const floors = batchTargetFloor === 'all'
-      ? Array.from({ length: batchFloorCount }, (_, i) => i + 1)
-      : [parseInt(batchTargetFloor, 10) || 1];
-
-    const existingMeters = new Set(state.connections.map((c) => c.meterSerial.toLowerCase()));
-    const batchDrafts: Omit<WaterConnection, 'id' | 'accountCode' | 'lastReadCycle'>[] = [];
-
-    for (const floor of floors) {
-      for (let r = 1; r <= batchRoomsPerFloor; r++) {
-        const roomCode = `A${r}`;
-        const premiseAddress = `New Building, Floor ${floor}, Room ${roomCode}`;
-        const customerName = `Floor ${floor} Room ${roomCode} Tenant`;
-        const meterSerial = `${batchMeterPrefix.trim() || 'NB-'}F${floor}-${roomCode}`;
-
-        if (existingMeters.has(meterSerial.toLowerCase())) {
-          setBatchError(`Meter serial ${meterSerial} is already assigned. Please adjust prefix or rooms.`);
-          return;
-        }
-        existingMeters.add(meterSerial.toLowerCase());
-
-        batchDrafts.push({
-          customerName,
-          premiseAddress,
-          zone: SupplyZone.NewBuilding,
-          category: batchCategory,
-          meterSerial,
-          status: ConnectionStatus.Active,
-          phone: '0712000000',
-          email: `f${floor}.${roomCode.toLowerCase()}@newbuilding.ke`,
-          lastReadingTenthsM3: tenths,
-        });
-      }
-    }
-
-    if (onBatchAddConnections) {
-      onBatchAddConnections(batchDrafts);
-    } else {
-      // Fallback: add sequentially
-      batchDrafts.forEach((d) => onAddConnection(d));
-    }
-
-    setBatchModalOpen(false);
-    setBatchError('');
-  };
-
-  const handleBatchGenerateOldBuildingRooms = (e: React.FormEvent) => {
-    e.preventDefault();
-    const tenths = parseM3InputToTenths(oldBatchInitialIndex);
-    if (tenths === null) {
-      setOldBatchError('Enter a valid non-negative initial meter index in m³.');
-      return;
-    }
-
-    // Specification: First floor A1 and A6; Second floor B1-B12, C1-C12, D1-D12, E1-E5
-    const floor1Rooms = ['A1', 'A6'];
-    const floor2Rooms: string[] = [
-      ...Array.from({ length: 12 }, (_, i) => `B${i + 1}`),
-      ...Array.from({ length: 12 }, (_, i) => `C${i + 1}`),
-      ...Array.from({ length: 12 }, (_, i) => `D${i + 1}`),
-      ...Array.from({ length: 5 }, (_, i) => `E${i + 1}`),
-    ];
-
-    const targets: { floor: number; floorLabel: string; room: string }[] = [];
-    if (oldBatchFloorFilter === 'all' || oldBatchFloorFilter === 'F1') {
-      floor1Rooms.forEach((r) => targets.push({ floor: 1, floorLabel: 'Floor 1', room: r }));
-    }
-    if (oldBatchFloorFilter === 'all' || oldBatchFloorFilter === 'F2') {
-      floor2Rooms.forEach((r) => targets.push({ floor: 2, floorLabel: 'Floor 2', room: r }));
-    }
-
-    const existingMeters = new Set(state.connections.map((c) => c.meterSerial.toLowerCase()));
-    const batchDrafts: Omit<WaterConnection, 'id' | 'accountCode' | 'lastReadCycle'>[] = [];
-
-    for (const item of targets) {
-      const premiseAddress = `Old Building, ${item.floorLabel}, Room ${item.room}`;
-      const customerName = `${item.floorLabel} Room ${item.room} Tenant`;
-      const meterSerial = `${oldBatchMeterPrefix.trim() || 'OB-'}F${item.floor}-${item.room}`;
-
-      if (existingMeters.has(meterSerial.toLowerCase())) {
-        setOldBatchError(`Meter serial ${meterSerial} is already assigned. Please adjust prefix or records.`);
-        return;
-      }
-      existingMeters.add(meterSerial.toLowerCase());
-
-      batchDrafts.push({
-        customerName,
-        premiseAddress,
-        zone: SupplyZone.OldBuilding,
-        category: oldBatchCategory,
-        meterSerial,
-        status: ConnectionStatus.Active,
-        phone: '0722000000',
-        email: `ob.f${item.floor}.${item.room.toLowerCase()}@oldbuilding.ke`,
-        lastReadingTenthsM3: tenths,
-      });
-    }
-
-    if (onBatchAddConnections) {
-      onBatchAddConnections(batchDrafts);
-    } else {
-      batchDrafts.forEach((d) => onAddConnection(d));
-    }
-
-    setOldBatchModalOpen(false);
-    setOldBatchError('');
-  };
-
-  const handleBatchGenerateHeavyMeters = (e: React.FormEvent) => {
-    e.preventDefault();
-    const tenths = parseM3InputToTenths(heavyBatchInitialIndex);
-    if (tenths === null) {
-      setHeavyBatchError('Enter a valid non-negative initial meter index in m³.');
-      return;
-    }
-
-    const existingMeters = new Set(state.connections.map((c) => c.meterSerial.toLowerCase()));
-    const batchDrafts: Omit<WaterConnection, 'id' | 'accountCode' | 'lastReadCycle'>[] = [];
-
-    for (let i = 1; i <= heavyBatchCount; i++) {
-      const meterCode = `F${i}`;
-      const premiseAddress = `Heavy Consumer Zone, Main Feeder ${meterCode}`;
-      const customerName = `Heavy Consumer ${meterCode} Client`;
-      const meterSerial = `${heavyBatchMeterPrefix.trim() || 'HM-'}${meterCode}`;
-
-      if (existingMeters.has(meterSerial.toLowerCase())) {
-        setHeavyBatchError(`Meter serial ${meterSerial} is already assigned. Please adjust prefix or records.`);
-        return;
-      }
-      existingMeters.add(meterSerial.toLowerCase());
-
-      batchDrafts.push({
-        customerName,
-        premiseAddress,
-        zone: SupplyZone.HeavyConsumer,
-        category: heavyBatchCategory,
-        meterSerial,
-        status: ConnectionStatus.Active,
-        phone: `073300${String(i).padStart(4, '0')}`,
-        email: `heavy.${meterCode.toLowerCase()}@heavyconsumer.ke`,
-        lastReadingTenthsM3: tenths,
-      });
-    }
-
-    if (onBatchAddConnections) {
-      onBatchAddConnections(batchDrafts);
-    } else {
-      batchDrafts.forEach((d) => onAddConnection(d));
-    }
-
-    setHeavyBatchModalOpen(false);
-    setHeavyBatchError('');
   };
 
   const categoryChips: { id: TariffCategory | 'ALL'; label: string; count: number }[] = [
@@ -477,54 +324,60 @@ export function AccountsView({
             />
           </div>
 
-          <select
-            aria-label="Filter accounts by supply zone"
-            value={zoneFilter}
-            onChange={(e) => setZoneFilter(e.target.value as SupplyZone | 'ALL')}
-            className="min-h-10 rounded-control border border-border/55 bg-surface px-3 text-label text-foreground focus-visible:outline-2 focus-visible:outline-primary"
-          >
-            <option value="ALL">All supply zones</option>
-            <option value={SupplyZone.OldBuilding}>{SupplyZone.OldBuilding}</option>
-            <option value={SupplyZone.NewBuilding}>{SupplyZone.NewBuilding}</option>
-            <option value={SupplyZone.HeavyConsumer}>{SupplyZone.HeavyConsumer}</option>
-          </select>
-
-          <Button
-            tone="quiet"
-            size="sm"
-            onClick={() => setHeavyBatchModalOpen(true)}
-            title="Generate heavy meter consumer accounts (F1 to F10)"
-          >
-            <Zap className="size-4 text-warning" />
-            Heavy meters (F1-F10)
-          </Button>
-
-          <Button
-            tone="quiet"
-            size="sm"
-            onClick={() => setOldBatchModalOpen(true)}
-            title="Generate room accounts for Old Building (F1: A1, A6; F2: B1-B12, C1-C12, D1-D12, E1-E5)"
-          >
-            <Building2 className="size-4 text-accent" />
-            Old Building rooms
-          </Button>
-
-          <Button
-            tone="quiet"
-            size="sm"
-            onClick={() => setBatchModalOpen(true)}
-            title="Generate room accounts for New Building floors (A1 to A10)"
-          >
-            <Building2 className="size-4 text-primary" />
-            New Building rooms
-          </Button>
-
           <Button tone="primary" size="sm" onClick={() => onAddModalOpenChange(true)}>
             <Plus className="size-4" />
             Add client
           </Button>
         </div>
       </div>
+
+      {/* Lifetime Paid vs Not Paid Summary Strip */}
+      <Surface>
+        <div className="grid grid-cols-2 divide-x divide-y divide-border/35 sm:grid-cols-4 sm:divide-y-0">
+          <div className="px-4 py-3">
+            <div className="text-caption text-muted">Paid in full (lifetime)</div>
+            <div className="mt-0.5 text-section font-semibold tabular-nums text-accent">
+              {`${lifetimeSummary.accountsPaidInFullCount} accounts`}
+            </div>
+            <div className="text-[11px] text-muted">
+              {`${lifetimeSummary.accountsWithAnyPaymentCount} clients have paid`}
+            </div>
+          </div>
+          <div className="px-4 py-3">
+            <div className="text-caption text-muted">Not paid / open balance</div>
+            <div
+              className={`mt-0.5 text-section font-semibold tabular-nums ${
+                lifetimeSummary.accountsNotPaidCount > 0 ? 'text-danger' : 'text-foreground'
+              }`}
+            >
+              {`${lifetimeSummary.accountsNotPaidCount} accounts`}
+            </div>
+            <div className="text-[11px] text-muted">
+              {`${lifetimeSummary.totalUnpaidInvoicesLifetime} unpaid bills (${lifetimeSummary.accountsNeverPaidCount} never paid)`}
+            </div>
+          </div>
+          <div className="px-4 py-3">
+            <div className="text-caption text-muted">Lifetime cash collected</div>
+            <div className="mt-0.5 text-section font-semibold tabular-nums text-foreground">
+              {formatCents(lifetimeSummary.totalLifetimeCollectedKsh)}
+            </div>
+            <div className="text-[11px] text-muted">
+              {`${lifetimeSummary.totalPaidInvoicesLifetime} settled bills`}
+            </div>
+          </div>
+          <div className="px-4 py-3">
+            <div className="text-caption text-muted">Lifetime unpaid balance</div>
+            <div
+              className={`mt-0.5 text-section font-semibold tabular-nums ${
+                lifetimeSummary.totalLifetimeOutstandingKsh > 0 ? 'text-danger' : 'text-accent'
+              }`}
+            >
+              {formatCents(lifetimeSummary.totalLifetimeOutstandingKsh)}
+            </div>
+            <div className="text-[11px] text-muted">Cumulative open receivables</div>
+          </div>
+        </div>
+      </Surface>
 
       {/* Master-Detail */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
@@ -539,25 +392,13 @@ export function AccountsView({
               <p className="text-section text-foreground">No clients found</p>
               <p className="mt-1 text-caption text-muted">
                 {state.connections.length === 0
-                  ? 'Your system is currently fresh and clean with 0 records. Add your first water client or generate building/heavy meter presets.'
+                  ? 'Your system is currently fresh and clean with 0 records. Add your first water client to get started.'
                   : 'No client records match the selected filters or search query.'}
               </p>
               <div className="mt-4 flex flex-wrap items-center justify-center gap-2.5">
-                <Button tone="primary" size="sm" onClick={() => setHeavyBatchModalOpen(true)}>
-                  <Zap className="size-4" />
-                  Generate Heavy meters (F1 to F10)
-                </Button>
-                <Button tone="quiet" size="sm" onClick={() => setOldBatchModalOpen(true)}>
-                  <Building2 className="size-4" />
-                  Generate Old Building (43 rooms)
-                </Button>
-                <Button tone="quiet" size="sm" onClick={() => setBatchModalOpen(true)}>
-                  <Building2 className="size-4" />
-                  Generate New Building (F1 A1-A10)
-                </Button>
-                <Button tone="quiet" size="sm" onClick={() => onAddModalOpenChange(true)}>
+                <Button tone="primary" size="sm" onClick={() => onAddModalOpenChange(true)}>
                   <Plus className="size-4" />
-                  Add single client
+                  Add client
                 </Button>
               </div>
             </div>
@@ -594,7 +435,7 @@ export function AccountsView({
                           <div className="font-medium text-foreground">{conn.customerName}</div>
                           <div className="mt-0.5 text-caption text-muted">
                             <span className="font-mono text-foreground/85">{conn.accountCode}</span>
-                            {` · ${conn.premiseAddress} · ${conn.zone}`}
+                            {` · ${conn.premiseAddress}`}
                           </div>
                         </td>
                         <td className="px-4 py-3.5">
@@ -663,7 +504,7 @@ export function AccountsView({
                       {activeConnection.customerName}
                     </h2>
                     <p className="text-caption text-muted">
-                      {`${activeConnection.premiseAddress} · ${activeConnection.zone}`}
+                      {activeConnection.premiseAddress}
                     </p>
                   </div>
                   <div className="flex flex-col items-end gap-1.5 shrink-0">
@@ -698,7 +539,7 @@ export function AccountsView({
                     </div>
                   </div>
                 </div>
-                <div className="text-caption text-muted">
+                <div className="text-caption text-muted border-t border-border/25 pt-2">
                   <span>{`Tariff: ${activeConnection.category} (${
                     activeConnection.category === TariffCategory.Residential ? 'KSh 150/m³' : 'KSh 180/m³'
                   })`}</span>
@@ -805,6 +646,34 @@ export function AccountsView({
                     Date · Amount paid (KSh) · Payment status
                   </span>
                 </div>
+                {activeLifetimeRow ? (
+                  <div className="grid grid-cols-3 divide-x divide-border/35 rounded-control border border-border/35 bg-background/50">
+                    <div className="px-3 py-2">
+                      <div className="text-[11px] text-muted">Lifetime paid</div>
+                      <div className="text-label font-semibold tabular-nums text-accent">
+                        {formatCents(activeLifetimeRow.lifetimePaidKsh)}
+                      </div>
+                    </div>
+                    <div className="px-3 py-2">
+                      <div className="text-[11px] text-muted">Bills paid</div>
+                      <div className="text-label font-semibold tabular-nums text-foreground">
+                        {`${activeLifetimeRow.paidBillsCount} / ${activeLifetimeRow.totalBillsCount}`}
+                      </div>
+                    </div>
+                    <div className="px-3 py-2">
+                      <div className="text-[11px] text-muted">Unpaid bills</div>
+                      <div
+                        className={`text-label font-semibold tabular-nums ${
+                          activeLifetimeRow.unpaidBillsCount > 0 ? 'text-danger' : 'text-accent'
+                        }`}
+                      >
+                        {`${activeLifetimeRow.unpaidBillsCount} (${formatCents(
+                          activeLifetimeRow.currentBalanceKsh
+                        )})`}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
                 <UserHistoricalBillsTable
                   connection={activeConnection}
                   invoices={state.invoices}
@@ -903,6 +772,16 @@ export function AccountsView({
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field
+              label="Paybill Account Ref (Code)"
+              value={editAccountCode}
+              onChange={(e) => {
+                setEditAccountCode(e.target.value.toUpperCase());
+                setEditError('');
+              }}
+              placeholder="e.g. VW-1048 or HSE-101"
+              required
+            />
+            <Field
               label="Customer or business name"
               value={editName}
               onChange={(e) => {
@@ -911,6 +790,9 @@ export function AccountsView({
               }}
               required
             />
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <Field
               label="Premise street address"
               value={editAddress}
@@ -920,21 +802,6 @@ export function AccountsView({
               }}
               required
             />
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <SelectField
-              label="Supply zone"
-              value={editZone}
-              onChange={(e) => setEditZone(e.target.value as SupplyZone)}
-            >
-              {Object.values(SupplyZone).map((z) => (
-                <option key={z} value={z}>
-                  {z}
-                </option>
-              ))}
-            </SelectField>
-
             <SelectField
               label="Tariff class"
               value={editCategory}
@@ -942,6 +809,14 @@ export function AccountsView({
             >
               <option value={TariffCategory.Residential}>Residents (KSh 150/m³)</option>
               <option value={TariffCategory.HeavyClients}>Heavy Clients (KSh 180/m³)</option>
+            </SelectField>
+            <SelectField
+              label="Supply status"
+              value={editStatus}
+              onChange={(e) => setEditStatus(e.target.value as ConnectionStatus)}
+            >
+              <option value={ConnectionStatus.Active}>Active</option>
+              <option value={ConnectionStatus.Suspended}>Suspended</option>
             </SelectField>
           </div>
 
@@ -1010,7 +885,7 @@ export function AccountsView({
         open={addModalOpen}
         onClose={() => onAddModalOpenChange(false)}
         title="Register new water client"
-        subtitle="Assign a physical meter serial, supply zone, and tariff rate class."
+        subtitle="Assign a physical meter serial and tariff rate class."
         maxWidthClass="max-w-xl"
       >
         <form onSubmit={handleAddSubmit} className="space-y-4">
@@ -1045,18 +920,15 @@ export function AccountsView({
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <SelectField
-              label="Supply zone"
-              value={newZone}
-              onChange={(e) => setNewZone(e.target.value as SupplyZone)}
-            >
-              {Object.values(SupplyZone).map((z) => (
-                <option key={z} value={z}>
-                  {z}
-                </option>
-              ))}
-            </SelectField>
-
+            <Field
+              label="Paybill Account Ref (optional)"
+              placeholder="Auto-generated e.g. VW-1150"
+              value={newAccountCode}
+              onChange={(e) => {
+                setNewAccountCode(e.target.value.toUpperCase());
+                setAddError('');
+              }}
+            />
             <SelectField
               label="Tariff class"
               value={newCategory}
@@ -1118,296 +990,6 @@ export function AccountsView({
         </form>
       </ModalDialog>
 
-      {/* Batch Generate New Building Rooms Modal */}
-      <ModalDialog
-        open={batchModalOpen}
-        onClose={() => setBatchModalOpen(false)}
-        title="Generate New Building Room Clients"
-      >
-        <form onSubmit={handleBatchGenerateNewBuildingRooms} className="space-y-4">
-          <p className="text-body text-muted">
-            Configure rooms and floors for the <strong>New Building</strong> supply zone. Each room will be provisioned with an individual meter serial and tenant billing account.
-          </p>
-
-          {batchError ? (
-            <div
-              role="alert"
-              className="rounded-control border border-danger/40 bg-danger/10 px-3 py-2 text-caption text-danger"
-            >
-              {batchError}
-            </div>
-          ) : null}
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <SelectField
-              label="Floors to generate"
-              value={batchTargetFloor}
-              onChange={(e) => setBatchTargetFloor(e.target.value)}
-            >
-              <option value="1">Floor 1 only (F1 Rooms A1 to A10 - 10 rooms)</option>
-              <option value="all">All 5 Floors (F1 to F5, Rooms A1 to A10 - 50 rooms total)</option>
-            </SelectField>
-
-            <SelectField
-              label="Tariff classification"
-              value={batchCategory}
-              onChange={(e) => setBatchCategory(e.target.value as TariffCategory)}
-            >
-              <option value={TariffCategory.Residential}>Residents (KSh 150/m³)</option>
-              <option value={TariffCategory.HeavyClients}>Heavy Clients (KSh 180/m³)</option>
-            </SelectField>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <Field
-              label="Floors count"
-              type="number"
-              min="1"
-              max="20"
-              value={batchFloorCount}
-              onChange={(e) => setBatchFloorCount(Math.max(1, parseInt(e.target.value, 10) || 1))}
-              disabled={batchTargetFloor !== 'all'}
-            />
-            <Field
-              label="Rooms per floor"
-              type="number"
-              min="1"
-              max="50"
-              value={batchRoomsPerFloor}
-              onChange={(e) => setBatchRoomsPerFloor(Math.max(1, parseInt(e.target.value, 10) || 1))}
-            />
-            <Field
-              label="Meter serial prefix"
-              value={batchMeterPrefix}
-              onChange={(e) => setBatchMeterPrefix(e.target.value)}
-              placeholder="e.g. NB-"
-            />
-          </div>
-
-          <Field
-            label="Initial register index for all meters (m³)"
-            type="number"
-            step="0.1"
-            min="0"
-            value={batchInitialIndex}
-            onChange={(e) => setBatchInitialIndex(e.target.value)}
-            required
-          />
-
-          {/* Quick Summary Pill Box */}
-          <div className="rounded-control border border-border/45 bg-surface-muted/40 p-3 text-caption text-muted">
-            <span className="font-medium text-foreground">Preview: </span>
-            {batchTargetFloor === '1' ? (
-              <span>
-                10 accounts will be created for <strong>New Building Floor 1 (Rooms A1 through A10)</strong> with meter serials <code className="font-mono text-foreground">{batchMeterPrefix || 'NB-'}F1-A1</code> to <code className="font-mono text-foreground">{batchMeterPrefix || 'NB-'}F1-A10</code>.
-              </span>
-            ) : (
-              <span>
-                {batchFloorCount * batchRoomsPerFloor} accounts will be created across <strong>{batchFloorCount} floors</strong> (F1 to F{batchFloorCount}, Rooms A1 through A{batchRoomsPerFloor}) in the New Building supply zone.
-              </span>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2">
-            <Button tone="quiet" onClick={() => setBatchModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" tone="primary">
-              <Building2 className="size-4" />
-              {batchTargetFloor === '1' ? 'Create 10 clients (F1 A1-A10)' : `Create ${batchFloorCount * batchRoomsPerFloor} clients (5 floors)`}
-            </Button>
-          </div>
-        </form>
-      </ModalDialog>
-
-      {/* Batch Generate Old Building Rooms Modal */}
-      <ModalDialog
-        open={oldBatchModalOpen}
-        onClose={() => setOldBatchModalOpen(false)}
-        title="Generate Old Building Room Clients"
-      >
-        <form onSubmit={handleBatchGenerateOldBuildingRooms} className="space-y-4">
-          <p className="text-body text-muted">
-            Configure room clients for the <strong>Old Building</strong> supply zone based on the building layout:
-          </p>
-
-          <div className="rounded-control border border-border/40 bg-surface-muted/30 p-3 space-y-1.5 text-caption">
-            <div>
-              <span className="font-semibold text-foreground">First Floor: </span>
-              <span className="text-foreground/90 font-mono">A1, A6</span>
-              <span className="text-muted"> (2 rooms)</span>
-            </div>
-            <div>
-              <span className="font-semibold text-foreground">Second Floor: </span>
-              <span className="text-foreground/90 font-mono">B1–B12 (12) · C1–C12 (12) · D1–D12 (12) · E1–E5 (5)</span>
-              <span className="text-muted"> (41 rooms)</span>
-            </div>
-            <div className="pt-1 text-muted border-t border-border/30">
-              Total: <strong>43 rooms</strong> across both floors.
-            </div>
-          </div>
-
-          {oldBatchError ? (
-            <div
-              role="alert"
-              className="rounded-control border border-danger/40 bg-danger/10 px-3 py-2 text-caption text-danger"
-            >
-              {oldBatchError}
-            </div>
-          ) : null}
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <SelectField
-              label="Floors to generate"
-              value={oldBatchFloorFilter}
-              onChange={(e) => setOldBatchFloorFilter(e.target.value as 'all' | 'F1' | 'F2')}
-            >
-              <option value="all">All Floors (F1: A1, A6 & F2: B1-B12, C1-C12, D1-D12, E1-E5 - 43 rooms)</option>
-              <option value="F1">First Floor Only (A1, A6 - 2 rooms)</option>
-              <option value="F2">Second Floor Only (B1-B12, C1-C12, D1-D12, E1-E5 - 41 rooms)</option>
-            </SelectField>
-
-            <SelectField
-              label="Tariff classification"
-              value={oldBatchCategory}
-              onChange={(e) => setOldBatchCategory(e.target.value as TariffCategory)}
-            >
-              <option value={TariffCategory.Residential}>Residents (KSh 150/m³)</option>
-              <option value={TariffCategory.HeavyClients}>Heavy Clients (KSh 180/m³)</option>
-            </SelectField>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field
-              label="Meter serial prefix"
-              value={oldBatchMeterPrefix}
-              onChange={(e) => setOldBatchMeterPrefix(e.target.value)}
-              placeholder="e.g. OB-"
-            />
-            <Field
-              label="Initial register index for all meters (m³)"
-              type="number"
-              step="0.1"
-              min="0"
-              value={oldBatchInitialIndex}
-              onChange={(e) => setOldBatchInitialIndex(e.target.value)}
-              required
-            />
-          </div>
-
-          {/* Quick Summary Pill Box */}
-          <div className="rounded-control border border-border/45 bg-surface-muted/40 p-3 text-caption text-muted">
-            <span className="font-medium text-foreground">Summary: </span>
-            {oldBatchFloorFilter === 'F1' ? (
-              <span>
-                2 accounts will be generated for <strong>First Floor (Rooms A1, A6)</strong> with meter serials <code className="font-mono text-foreground">{oldBatchMeterPrefix || 'OB-'}F1-A1</code> and <code className="font-mono text-foreground">{oldBatchMeterPrefix || 'OB-'}F1-A6</code>.
-              </span>
-            ) : oldBatchFloorFilter === 'F2' ? (
-              <span>
-                41 accounts will be generated for <strong>Second Floor (B1–B12, C1–C12, D1–D12, E1–E5)</strong> with meter serials <code className="font-mono text-foreground">{oldBatchMeterPrefix || 'OB-'}F2-B1</code> through <code className="font-mono text-foreground">{oldBatchMeterPrefix || 'OB-'}F2-E5</code>.
-              </span>
-            ) : (
-              <span>
-                43 accounts will be generated for <strong>Old Building</strong>: Floor 1 (A1, A6) and Floor 2 (B1-B12, C1-C12, D1-D12, E1-E5).
-              </span>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2">
-            <Button tone="quiet" onClick={() => setOldBatchModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" tone="primary">
-              <Building2 className="size-4" />
-              {oldBatchFloorFilter === 'F1'
-                ? 'Create 2 clients (F1 A1, A6)'
-                : oldBatchFloorFilter === 'F2'
-                ? 'Create 41 clients (F2 B, C, D, E)'
-                : 'Create 43 clients (Old Building)'}
-            </Button>
-          </div>
-        </form>
-      </ModalDialog>
-
-      {/* Batch Generate Heavy Meters (F1 to F10) Modal */}
-      <ModalDialog
-        open={heavyBatchModalOpen}
-        onClose={() => setHeavyBatchModalOpen(false)}
-        title="Generate Heavy Meter Clients (F1 to F10)"
-      >
-        <form onSubmit={handleBatchGenerateHeavyMeters} className="space-y-4">
-          <p className="text-body text-muted">
-            Configure industrial / heavy commercial consumers for the <strong>Heavy Consumer</strong> supply zone. Provisions bulk meters designated <strong>F1 through F10</strong>.
-          </p>
-
-          {heavyBatchError ? (
-            <div
-              role="alert"
-              className="rounded-control border border-danger/40 bg-danger/10 px-3 py-2 text-caption text-danger"
-            >
-              {heavyBatchError}
-            </div>
-          ) : null}
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <SelectField
-              label="Tariff classification"
-              value={heavyBatchCategory}
-              onChange={(e) => setHeavyBatchCategory(e.target.value as TariffCategory)}
-            >
-              <option value={TariffCategory.HeavyClients}>Heavy Clients (KSh 180/m³)</option>
-              <option value={TariffCategory.Residential}>Residents (KSh 150/m³)</option>
-            </SelectField>
-
-            <Field
-              label="Number of heavy meters"
-              type="number"
-              min="1"
-              max="20"
-              value={heavyBatchCount}
-              onChange={(e) => setHeavyBatchCount(Math.max(1, parseInt(e.target.value, 10) || 1))}
-              hint="Default: 10 meters (F1 to F10)"
-              required
-            />
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field
-              label="Meter serial prefix"
-              value={heavyBatchMeterPrefix}
-              onChange={(e) => setHeavyBatchMeterPrefix(e.target.value)}
-              placeholder="e.g. HM-"
-            />
-            <Field
-              label="Initial register index for all meters (m³)"
-              type="number"
-              step="0.1"
-              min="0"
-              value={heavyBatchInitialIndex}
-              onChange={(e) => setHeavyBatchInitialIndex(e.target.value)}
-              required
-            />
-          </div>
-
-          {/* Quick Summary Pill Box */}
-          <div className="rounded-control border border-border/45 bg-surface-muted/40 p-3 text-caption text-muted">
-            <span className="font-medium text-foreground">Summary: </span>
-            <span>
-              {heavyBatchCount} heavy commercial client accounts will be created in the <strong>Heavy Consumer</strong> zone with meters <code className="font-mono text-foreground">{heavyBatchMeterPrefix || 'HM-'}F1</code> to <code className="font-mono text-foreground">{heavyBatchMeterPrefix || 'HM-'}F{heavyBatchCount}</code> at <strong>KSh 180/m³</strong>.
-            </span>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2">
-            <Button tone="quiet" onClick={() => setHeavyBatchModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" tone="primary">
-              <Zap className="size-4" />
-              Create {heavyBatchCount} heavy meters (F1 to F{heavyBatchCount})
-            </Button>
-          </div>
-        </form>
-      </ModalDialog>
     </div>
   );
 }

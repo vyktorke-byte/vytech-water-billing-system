@@ -1,0 +1,495 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Default Deny Catch-All
+    // ===============================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ===============================================================
+    // Core Auth & Trusted RBAC Helpers
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email is string;
+    }
+
+    function normalizedAuthEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedSuperAdmin() {
+      return isAuthenticated() && normalizedAuthEmail() == 'vyktorke@gmail.com';
+    }
+
+    function hasStaffRole(expectedRole) {
+      return isAuthenticated()
+        && exists(/databases/$(database)/documents/staffAccess/$(normalizedAuthEmail()))
+        && get(/databases/$(database)/documents/staffAccess/$(normalizedAuthEmail())).data.role == expectedRole;
+    }
+
+    function isSuperAdmin() {
+      return isBootstrappedSuperAdmin() || hasStaffRole('superadmin');
+    }
+
+    function isAdmin() {
+      return isSuperAdmin() || hasStaffRole('admin');
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9._-]+$');
+    }
+
+    function isValidEmailDocId(emailId) {
+      return emailId is string && emailId.size() >= 4 && emailId.size() <= 254 && emailId.matches('^[^/\\s]+@[^/\\s]+\\.[^/\\s]+$');
+    }
+
+    function isValidLocalDate(d) {
+      return d is map
+        && d.keys().hasAll(['year', 'month', 'day'])
+        && d.keys().hasOnly(['year', 'month', 'day'])
+        && d.year is int && d.year >= 2020 && d.year <= 2100
+        && d.month is int && d.month >= 1 && d.month <= 12
+        && d.day is int && d.day >= 1 && d.day <= 31;
+    }
+
+    function isValidOptionalString(val, maxLen) {
+      return val is string && val.size() <= maxLen;
+    }
+
+    // ===============================================================
+    // Entity Validators
+    // ===============================================================
+    function isAllowedAssignedRole(role) {
+      return (role == 'operator')
+        || (role == 'admin' && (isAdmin() || hasStaffRole('admin')))
+        || (role == 'superadmin' && isSuperAdmin());
+    }
+
+    function isValidOperatorProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'photoURL', 'role', 'createdAt', 'updatedAt'])
+        && data.uid == userId
+        && data.email is string && data.email.size() > 3 && data.email.size() <= 254
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && (!('photoURL' in data) || isValidOptionalString(data.photoURL, 512))
+        && data.role in ['superadmin', 'admin', 'operator']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStaffAccess(data, emailId) {
+      return isValidEmailDocId(emailId)
+        && data.keys().hasAll(['email', 'role', 'displayName', 'assignedByEmail', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['email', 'role', 'displayName', 'assignedByEmail', 'createdAt', 'updatedAt'])
+        && data.email == emailId
+        && data.role in ['superadmin', 'admin', 'operator']
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.assignedByEmail is string && data.assignedByEmail.size() > 3 && data.assignedByEmail.size() <= 254
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidConnection(data, connectionId) {
+      return isValidId(connectionId)
+        && data.keys().hasAll([
+          'id', 'ownerId', 'accountCode', 'customerName', 'premiseAddress',
+          'category', 'meterSerial', 'status', 'phone', 'email',
+          'lastReadingTenthsM3', 'lastReadCycle', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'accountCode', 'customerName', 'premiseAddress',
+          'category', 'meterSerial', 'status', 'phone', 'email',
+          'lastReadingTenthsM3', 'lastReadCycle', 'updatedAt'
+        ])
+        && data.id == connectionId
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.accountCode is string && data.accountCode.size() >= 1 && data.accountCode.size() <= 40
+        && data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 120
+        && data.premiseAddress is string && data.premiseAddress.size() >= 1 && data.premiseAddress.size() <= 160
+        && data.category in ['Residents', 'Heavy Clients']
+        && data.meterSerial is string && data.meterSerial.size() >= 1 && data.meterSerial.size() <= 60
+        && data.status in ['Active', 'Suspended']
+        && data.phone is string && data.phone.size() <= 40
+        && data.email is string && data.email.size() <= 254
+        && data.lastReadingTenthsM3 is int && data.lastReadingTenthsM3 >= 0 && data.lastReadingTenthsM3 <= 100000000
+        && data.lastReadCycle is string && data.lastReadCycle.size() >= 4 && data.lastReadCycle.size() <= 20
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidReading(data, readingId) {
+      return isValidId(readingId)
+        && data.keys().hasAll([
+          'id', 'ownerId', 'connectionId', 'cycleId', 'readDate',
+          'previousTenthsM3', 'currentTenthsM3', 'consumptionTenthsM3',
+          'readerInitials', 'isSpikeFlagged', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'connectionId', 'cycleId', 'readDate',
+          'previousTenthsM3', 'currentTenthsM3', 'consumptionTenthsM3',
+          'readerInitials', 'anomalyNote', 'isSpikeFlagged', 'photoUrl', 'updatedAt'
+        ])
+        && data.id == readingId
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && isValidId(data.connectionId)
+        && data.cycleId is string && data.cycleId.size() >= 4 && data.cycleId.size() <= 20
+        && isValidLocalDate(data.readDate)
+        && data.previousTenthsM3 is int && data.previousTenthsM3 >= 0 && data.previousTenthsM3 <= 100000000
+        && data.currentTenthsM3 is int && data.currentTenthsM3 >= data.previousTenthsM3 && data.currentTenthsM3 <= 100000000
+        && data.consumptionTenthsM3 is int && data.consumptionTenthsM3 >= 0 && data.consumptionTenthsM3 <= 100000000
+        && data.readerInitials is string && data.readerInitials.size() >= 1 && data.readerInitials.size() <= 16
+        && (!('anomalyNote' in data) || isValidOptionalString(data.anomalyNote, 300))
+        && data.isSpikeFlagged is bool
+        && (!('photoUrl' in data) || isValidOptionalString(data.photoUrl, 200000))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidInvoice(data, invoiceId) {
+      return isValidId(invoiceId)
+        && data.keys().hasAll([
+          'id', 'ownerId', 'invoiceNumber', 'connectionId', 'cycleId', 'readingId',
+          'issueDate', 'dueDate', 'previousTenthsM3', 'currentTenthsM3',
+          'consumptionTenthsM3', 'ratePerM3', 'volumetricKsh', 'sewerageKsh',
+          'arrearsBroughtForwardKsh', 'cycleChargesKsh', 'totalPayableKsh',
+          'amountPaidKsh', 'status', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'invoiceNumber', 'connectionId', 'cycleId', 'readingId',
+          'issueDate', 'dueDate', 'previousTenthsM3', 'currentTenthsM3',
+          'consumptionTenthsM3', 'ratePerM3', 'volumetricKsh', 'sewerageKsh',
+          'arrearsBroughtForwardKsh', 'cycleChargesKsh', 'totalPayableKsh',
+          'amountPaidKsh', 'status', 'updatedAt'
+        ])
+        && data.id == invoiceId
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.invoiceNumber is string && data.invoiceNumber.size() >= 1 && data.invoiceNumber.size() <= 40
+        && isValidId(data.connectionId)
+        && data.cycleId is string && data.cycleId.size() >= 4 && data.cycleId.size() <= 20
+        && isValidId(data.readingId)
+        && isValidLocalDate(data.issueDate)
+        && isValidLocalDate(data.dueDate)
+        && data.previousTenthsM3 is int && data.previousTenthsM3 >= 0
+        && data.currentTenthsM3 is int && data.currentTenthsM3 >= 0
+        && data.consumptionTenthsM3 is int && data.consumptionTenthsM3 >= 0
+        && data.ratePerM3 is number && data.ratePerM3 >= 0 && data.ratePerM3 <= 100000
+        && data.volumetricKsh is number && data.volumetricKsh >= 0
+        && data.sewerageKsh is number && data.sewerageKsh >= 0
+        && data.arrearsBroughtForwardKsh is number && data.arrearsBroughtForwardKsh >= 0
+        && data.cycleChargesKsh is number && data.cycleChargesKsh >= 0
+        && data.totalPayableKsh is number && data.totalPayableKsh >= 0
+        && data.amountPaidKsh is number && data.amountPaidKsh >= 0 && data.amountPaidKsh <= data.totalPayableKsh
+        && data.status in ['Paid', 'Pending', 'Overdue']
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPayment(data, paymentId) {
+      return isValidId(paymentId)
+        && data.keys().hasAll(['id', 'ownerId', 'invoiceId', 'paidDate', 'amountKsh', 'method', 'reference', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'invoiceId', 'paidDate', 'amountKsh', 'method', 'reference',
+          'status', 'connectionId', 'accountCode', 'billRefNumber', 'msisdn', 'shortCode', 'updatedAt'
+        ])
+        && data.id == paymentId
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && isValidId(data.invoiceId)
+        && isValidLocalDate(data.paidDate)
+        && data.amountKsh is number && data.amountKsh > 0 && data.amountKsh <= 1000000000
+        && data.method is string && data.method.size() >= 1 && data.method.size() <= 40
+        && data.reference is string && data.reference.size() >= 1 && data.reference.size() <= 80
+        && (!('status' in data) || data.status in ['Completed', 'Pending', 'Failed'])
+        && (!('connectionId' in data) || isValidId(data.connectionId))
+        && (!('accountCode' in data) || isValidOptionalString(data.accountCode, 40))
+        && (!('billRefNumber' in data) || isValidOptionalString(data.billRefNumber, 80))
+        && (!('msisdn' in data) || isValidOptionalString(data.msisdn, 40))
+        && (!('shortCode' in data) || isValidOptionalString(data.shortCode, 20))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTariffSettings(data) {
+      return data.keys().hasAll([
+          'ownerId', 'residentsRatePerM3', 'residentsSeweragePercent',
+          'heavyRatePerM3', 'heavySeweragePercent', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'residentsRatePerM3', 'residentsSeweragePercent',
+          'heavyRatePerM3', 'heavySeweragePercent', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.residentsRatePerM3 is number && data.residentsRatePerM3 >= 0 && data.residentsRatePerM3 <= 100000
+        && data.residentsSeweragePercent is number && data.residentsSeweragePercent >= 0 && data.residentsSeweragePercent <= 100
+        && data.heavyRatePerM3 is number && data.heavyRatePerM3 >= 0 && data.heavyRatePerM3 <= 100000
+        && data.heavySeweragePercent is number && data.heavySeweragePercent >= 0 && data.heavySeweragePercent <= 100
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPaybillSettings(data) {
+      return data.keys().hasAll([
+          'ownerId', 'primaryPaybill', 'businessName', 'accountLabel', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'primaryPaybill', 'alternatePaybill', 'businessName', 'accountLabel', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.primaryPaybill is string && data.primaryPaybill.size() >= 1 && data.primaryPaybill.size() <= 20
+        && (!('alternatePaybill' in data) || isValidOptionalString(data.alternatePaybill, 20))
+        && data.businessName is string && data.businessName.size() >= 1 && data.businessName.size() <= 120
+        && data.accountLabel is string && data.accountLabel.size() >= 1 && data.accountLabel.size() <= 60
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNotification(data, notificationId) {
+      return isValidId(notificationId)
+        && data.keys().hasAll([
+          'id', 'ownerId', 'connectionId', 'customerName', 'accountCode',
+          'channel', 'recipient', 'messageSummary', 'status',
+          'sentDate', 'sentTime', 'dispatchedBy', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'connectionId', 'customerName', 'accountCode',
+          'invoiceId', 'invoiceNumber', 'channel', 'recipient',
+          'messageSummary', 'status', 'sentDate', 'sentTime', 'dispatchedBy', 'updatedAt'
+        ])
+        && data.id == notificationId
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && isValidId(data.connectionId)
+        && data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 120
+        && data.accountCode is string && data.accountCode.size() >= 1 && data.accountCode.size() <= 40
+        && (!('invoiceId' in data) || isValidId(data.invoiceId))
+        && (!('invoiceNumber' in data) || isValidOptionalString(data.invoiceNumber, 40))
+        && data.channel in ['SMS', 'EMAIL', 'WHATSAPP']
+        && data.recipient is string && data.recipient.size() >= 1 && data.recipient.size() <= 254
+        && data.messageSummary is string && data.messageSummary.size() >= 1 && data.messageSummary.size() <= 500
+        && data.status in ['Delivered', 'Sent', 'Pending', 'Failed']
+        && isValidLocalDate(data.sentDate)
+        && data.sentTime is string && data.sentTime.size() >= 1 && data.sentTime.size() <= 20
+        && data.dispatchedBy is string && data.dispatchedBy.size() >= 1 && data.dispatchedBy.size() <= 120
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMpesaTransaction(data, transDocId) {
+      return isValidId(transDocId)
+        && data.keys().hasAll([
+          'id', 'ownerId', 'transId', 'transTime', 'transAmount', 'businessShortCode',
+          'billRefNumber', 'msisdn', 'customerName', 'appliedAmountKsh',
+          'unallocatedKsh', 'status', 'receivedAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'transId', 'transTime', 'transAmount', 'businessShortCode',
+          'billRefNumber', 'msisdn', 'customerName', 'connectionId', 'accountCode',
+          'matchedInvoiceIds', 'appliedAmountKsh', 'unallocatedKsh', 'status',
+          'receivedAt', 'reconciled', 'updatedAt'
+        ])
+        && data.id == transDocId
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.transId is string && data.transId.size() >= 1 && data.transId.size() <= 60
+        && data.transTime is string && data.transTime.size() >= 1 && data.transTime.size() <= 60
+        && data.transAmount is number && data.transAmount >= 0 && data.transAmount <= 1000000000
+        && data.businessShortCode is string && data.businessShortCode.size() >= 1 && data.businessShortCode.size() <= 20
+        && data.billRefNumber is string && data.billRefNumber.size() >= 1 && data.billRefNumber.size() <= 80
+        && data.msisdn is string && data.msisdn.size() <= 40
+        && data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 120
+        && (!('connectionId' in data) || isValidId(data.connectionId))
+        && (!('accountCode' in data) || isValidOptionalString(data.accountCode, 40))
+        && (!('matchedInvoiceIds' in data) || (data.matchedInvoiceIds is list && data.matchedInvoiceIds.size() <= 25))
+        && data.appliedAmountKsh is number && data.appliedAmountKsh >= 0 && data.appliedAmountKsh <= 1000000000
+        && data.unallocatedKsh is number && data.unallocatedKsh >= 0 && data.unallocatedKsh <= 1000000000
+        && data.status in ['Completed', 'Unmatched', 'Failed']
+        && data.receivedAt is string && data.receivedAt.size() >= 1 && data.receivedAt.size() <= 60
+        && (!('reconciled' in data) || data.reconciled is bool)
+        && data.updatedAt is timestamp;
+    }
+
+    // ===============================================================
+    // Staff RBAC Allowlist (Managed strictly by Super Admin)
+    // ===============================================================
+    match /staffAccess/{emailId} {
+      allow get: if (isAuthenticated() && normalizedAuthEmail() == emailId) || isAdmin();
+      allow list: if isBootstrappedSuperAdmin()
+        || (isAuthenticated() && (resource.data.email == normalizedAuthEmail() || resource.data.assignedByEmail == normalizedAuthEmail()));
+      allow create, update: if isSuperAdmin()
+        && isValidStaffAccess(request.resource.data, emailId);
+      allow delete: if isSuperAdmin() && isValidEmailDocId(emailId);
+    }
+
+    // ===============================================================
+    // Shared Utility Workspace (Admins & Super Admins)
+    // ===============================================================
+    match /workspaces/{workspaceId} {
+      allow get: if isAdmin() && isValidId(workspaceId);
+      allow list: if isBootstrappedSuperAdmin();
+
+      match /connections/{connectionId} {
+        allow read: if isAdmin();
+        allow create, update: if isAdmin()
+          && isValidConnection(request.resource.data, connectionId);
+        allow delete: if isAdmin() && isValidId(connectionId);
+      }
+
+      match /readings/{readingId} {
+        allow read: if isAdmin();
+        allow create, update: if isAdmin()
+          && isValidReading(request.resource.data, readingId);
+        allow delete: if isAdmin() && isValidId(readingId);
+      }
+
+      match /invoices/{invoiceId} {
+        allow read: if isAdmin();
+        allow create, update: if isAdmin()
+          && isValidInvoice(request.resource.data, invoiceId);
+        allow delete: if isAdmin() && isValidId(invoiceId);
+      }
+
+      match /payments/{paymentId} {
+        allow read: if isAdmin();
+        allow create, update: if isAdmin()
+          && isValidPayment(request.resource.data, paymentId);
+        allow delete: if isAdmin() && isValidId(paymentId);
+      }
+
+      match /settings/{settingId} {
+        allow read: if isAdmin() && settingId in ['tariffs', 'paybill'];
+        allow create, update: if isAdmin()
+          && (
+            (settingId == 'tariffs' && isValidTariffSettings(request.resource.data))
+            || (settingId == 'paybill' && isValidPaybillSettings(request.resource.data))
+          );
+        allow delete: if isAdmin() && settingId in ['tariffs', 'paybill'];
+      }
+
+      match /notifications/{notificationId} {
+        allow read: if isAdmin();
+        allow create, update: if isAdmin()
+          && isValidNotification(request.resource.data, notificationId);
+        allow delete: if isAdmin() && isValidId(notificationId);
+      }
+
+      match /mpesaTransactions/{transId} {
+        allow read: if isAdmin();
+        allow create, update: if isAdmin()
+          && isValidMpesaTransaction(request.resource.data, transId);
+        allow delete: if isAdmin() && isValidId(transId);
+      }
+    }
+
+    // ===============================================================
+    // User Profiles & Operator-Scoped Subcollections
+    // ===============================================================
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isBootstrappedSuperAdmin()
+        || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow create: if isOwner(userId)
+        && isValidId(userId)
+        && isValidOperatorProfile(request.resource.data, userId)
+        && isAllowedAssignedRole(request.resource.data.role);
+      allow update: if isValidOperatorProfile(request.resource.data, userId)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (
+          isSuperAdmin()
+          || (
+            isOwner(userId)
+            && isAllowedAssignedRole(request.resource.data.role)
+            && (request.resource.data.role == resource.data.role || isAdmin())
+          )
+        );
+      allow delete: if false;
+
+      match /connections/{connectionId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId)
+          && isValidConnection(request.resource.data, connectionId)
+          && request.resource.data.ownerId == userId;
+        allow update: if isOwner(userId)
+          && isValidConnection(request.resource.data, connectionId)
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.ownerId == resource.data.ownerId;
+        allow delete: if isOwner(userId);
+      }
+
+      match /readings/{readingId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId)
+          && isValidReading(request.resource.data, readingId)
+          && request.resource.data.ownerId == userId;
+        allow update: if isOwner(userId)
+          && isValidReading(request.resource.data, readingId)
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.ownerId == resource.data.ownerId;
+        allow delete: if isOwner(userId);
+      }
+
+      match /invoices/{invoiceId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId)
+          && isValidInvoice(request.resource.data, invoiceId)
+          && request.resource.data.ownerId == userId;
+        allow update: if isOwner(userId)
+          && isValidInvoice(request.resource.data, invoiceId)
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.ownerId == resource.data.ownerId;
+        allow delete: if isOwner(userId);
+      }
+
+      match /payments/{paymentId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId)
+          && isValidPayment(request.resource.data, paymentId)
+          && request.resource.data.ownerId == userId;
+        allow update: if isOwner(userId)
+          && isValidPayment(request.resource.data, paymentId)
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.ownerId == resource.data.ownerId;
+        allow delete: if isOwner(userId);
+      }
+
+      match /settings/{settingId} {
+        allow read: if (isOwner(userId) || isAdmin()) && settingId in ['tariffs', 'paybill'];
+        allow create: if isOwner(userId)
+          && request.resource.data.ownerId == userId
+          && (
+            (settingId == 'tariffs' && isValidTariffSettings(request.resource.data))
+            || (settingId == 'paybill' && isValidPaybillSettings(request.resource.data))
+          );
+        allow update: if isOwner(userId)
+          && request.resource.data.ownerId == resource.data.ownerId
+          && (
+            (settingId == 'tariffs' && isValidTariffSettings(request.resource.data))
+            || (settingId == 'paybill' && isValidPaybillSettings(request.resource.data))
+          );
+        allow delete: if isOwner(userId) && settingId in ['tariffs', 'paybill'];
+      }
+
+      match /notifications/{notificationId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId)
+          && isValidNotification(request.resource.data, notificationId)
+          && request.resource.data.ownerId == userId;
+        allow update: if isOwner(userId)
+          && isValidNotification(request.resource.data, notificationId)
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.ownerId == resource.data.ownerId;
+        allow delete: if isOwner(userId);
+      }
+
+      match /mpesaTransactions/{transId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId)
+          && isValidMpesaTransaction(request.resource.data, transId)
+          && request.resource.data.ownerId == userId;
+        allow update: if isOwner(userId)
+          && isValidMpesaTransaction(request.resource.data, transId)
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.ownerId == resource.data.ownerId;
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}

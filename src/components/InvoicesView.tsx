@@ -3,28 +3,53 @@ import {
   BillingCycleId,
   BillingStoreState,
   InvoiceStatus,
+  NotificationChannel,
+  NotificationStatus,
+  PaybillSettings,
   PaymentMethod,
   PaymentRecord,
-  SupplyZone,
 } from '../types/billing';
 import {
+  ACTIVE_CYCLE_ID,
+  buildWhatsAppUrl,
+  computeLifetimePaymentSummary,
   CYCLES,
+  DEFAULT_PAYBILL_NUMBER,
   formatCents,
   formatLocalDate,
   formatTenthsM3,
   parseUsdInputToCents,
 } from '../lib/billingMath';
+import {
+  buildInvoiceWhatsAppMessage,
+  downloadCustomerInvoicePdf,
+} from '../lib/invoicePdf';
+import { downloadMonthlyMunicipalReportPdf } from '../lib/monthlyReportPdf';
 import { Button, Field, ModalDialog, SelectField, Surface } from './ui';
-import { ArrowLeft, Check, Mail, MessageSquare, Printer, Receipt, Search } from 'lucide-react';
+import {
+  ArrowLeft,
+  Bell,
+  Check,
+  Download,
+  FileText,
+  Mail,
+  MessageSquare,
+  Printer,
+  Receipt,
+  Search,
+  Smartphone,
+} from 'lucide-react';
 import { PaymentReceiptModal } from './PaymentReceiptModal';
 import { InvoiceShareModal } from './InvoiceShareModal';
+import { MonthlyCollectionReportModal } from './MonthlyCollectionReportModal';
+import { NotificationLogView } from './NotificationLogView';
+import { MpesaPaybillLogView } from './MpesaPaybillLogView';
+import { PaybillModal } from './PaybillModal';
 
 interface InvoicesViewProps {
   state: BillingStoreState;
   statusFilter: InvoiceStatus | 'ALL';
   onStatusFilterChange: (s: InvoiceStatus | 'ALL') => void;
-  zoneFilter: SupplyZone | 'ALL';
-  onZoneFilterChange: (z: SupplyZone | 'ALL') => void;
   selectedInvoiceId: string | null;
   onSelectInvoice: (id: string | null) => void;
   onRecordPayment: (opts: {
@@ -35,20 +60,38 @@ interface InvoicesViewProps {
   }) => void;
   onBulkMarkPaid: (invoiceIds: string[]) => void;
   onOpenOverdueUtility?: () => void;
+  onReportDownloaded?: (filename: string) => void;
+  onLogNotification: (entry: {
+    connectionId: string;
+    customerName: string;
+    accountCode: string;
+    invoiceId?: string;
+    invoiceNumber?: string;
+    channel: NotificationChannel;
+    recipient: string;
+    messageSummary: string;
+    status?: NotificationStatus;
+  }) => void;
+  onNotice?: (message: string) => void;
+  onUpdatePaybill: (next: PaybillSettings) => void;
 }
 
 export function InvoicesView({
   state,
   statusFilter,
   onStatusFilterChange,
-  zoneFilter,
-  onZoneFilterChange,
   selectedInvoiceId,
   onSelectInvoice,
   onRecordPayment,
   onBulkMarkPaid,
   onOpenOverdueUtility,
+  onReportDownloaded,
+  onLogNotification,
+  onNotice,
+  onUpdatePaybill,
 }: InvoicesViewProps) {
+  const [subView, setSubView] = useState<'statements' | 'mpesa' | 'notifications'>('statements');
+  const [paybillModalOpen, setPaybillModalOpen] = useState(false);
   const [cycleFilter, setCycleFilter] = useState<BillingCycleId | 'ALL'>('2026-11');
   const [searchQuery, setSearchQuery] = useState('');
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
@@ -67,19 +110,26 @@ export function InvoicesView({
   // PDF Print & WhatsApp / Email dispatch modal state
   const [invoiceShareModalOpen, setInvoiceShareModalOpen] = useState(false);
 
+  // Monthly Collection Report modal state
+  const [monthlyReportModalOpen, setMonthlyReportModalOpen] = useState(false);
+
+  // Brief inline confirmation after downloading an invoice PDF for WhatsApp
+  const [detailPdfNotice, setDetailPdfNotice] = useState<string>('');
+
   const connMap = useMemo(
     () => new Map(state.connections.map((c) => [c.id, c])),
     [state.connections]
   );
 
-  // Scope invoices before status filter so status counts reflect current cycle/zone/search
+  const lifetimeSummary = useMemo(() => computeLifetimePaymentSummary(state), [state]);
+
+  // Scope invoices before status filter so status counts reflect current cycle/search
   const scopedInvoices = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return state.invoices
       .filter((inv) => {
         if (cycleFilter !== 'ALL' && inv.cycleId !== cycleFilter) return false;
         const conn = connMap.get(inv.connectionId);
-        if (zoneFilter !== 'ALL' && conn?.zone !== zoneFilter) return false;
         if (q) {
           const hay = `${inv.invoiceNumber} ${conn?.customerName ?? ''} ${conn?.accountCode ?? ''} ${conn?.meterSerial ?? ''}`.toLowerCase();
           if (!hay.includes(q)) return false;
@@ -90,7 +140,7 @@ export function InvoicesView({
         if (a.cycleId !== b.cycleId) return b.cycleId.localeCompare(a.cycleId);
         return b.invoiceNumber.localeCompare(a.invoiceNumber);
       });
-  }, [state.invoices, cycleFilter, zoneFilter, searchQuery, connMap]);
+  }, [state.invoices, cycleFilter, searchQuery, connMap]);
 
   const counts = useMemo(() => {
     let paid = 0;
@@ -205,8 +255,100 @@ export function InvoicesView({
     ? connMap.get(paymentTargetInvoice.connectionId) ?? null
     : null;
 
+  const notificationCount = (state.notifications ?? []).length;
+  const mpesaCount = (state.mpesaTransactions ?? []).length;
+
   return (
     <div className="space-y-5">
+      {/* Section Switcher: Invoice Statements vs M-Pesa C2B Paybill vs Historical Notification Log */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/35 pb-3">
+        <div
+          role="tablist"
+          aria-label="Invoices and ledger views"
+          className="inline-flex flex-wrap rounded-control border border-border/50 bg-surface p-1"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={subView === 'statements'}
+            onClick={() => setSubView('statements')}
+            className={`inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-control px-3.5 text-label font-medium transition-colors focus-visible:outline-2 focus-visible:outline-primary ${
+              subView === 'statements'
+                ? 'bg-primary text-primary-foreground shadow-xs'
+                : 'text-muted hover:text-foreground'
+            }`}
+          >
+            <FileText className="size-4" />
+            <span>{`Invoice statements · ${state.invoices.length}`}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={subView === 'mpesa'}
+            onClick={() => setSubView('mpesa')}
+            className={`inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-control px-3.5 text-label font-medium transition-colors focus-visible:outline-2 focus-visible:outline-primary ${
+              subView === 'mpesa'
+                ? 'bg-primary text-primary-foreground shadow-xs'
+                : 'text-muted hover:text-foreground'
+            }`}
+          >
+            <Smartphone className="size-4" />
+            <span>{`M-Pesa Paybill · ${mpesaCount}`}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={subView === 'notifications'}
+            onClick={() => setSubView('notifications')}
+            className={`inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-control px-3.5 text-label font-medium transition-colors focus-visible:outline-2 focus-visible:outline-primary ${
+              subView === 'notifications'
+                ? 'bg-primary text-primary-foreground shadow-xs'
+                : 'text-muted hover:text-foreground'
+            }`}
+          >
+            <Bell className="size-4" />
+            <span>{`Notification log · ${notificationCount}`}</span>
+          </button>
+        </div>
+
+        <p className="text-caption text-muted">
+          {subView === 'notifications'
+            ? 'Historical SMS, Email & WhatsApp dispatch log · Send notifications via WhatsApp only'
+            : subView === 'mpesa'
+            ? `Safaricom C2B Paybill ${state.paybill?.primaryPaybill || DEFAULT_PAYBILL_NUMBER}${
+                state.paybill?.alternatePaybill ? ` / ${state.paybill.alternatePaybill}` : ''
+              } webhooks & instant auto-reconciliation`
+            : 'Monthly billing statements, payments & municipal revenue audit'}
+        </p>
+      </div>
+
+      {subView === 'notifications' ? (
+        <NotificationLogView
+          state={state}
+          onLogNotification={onLogNotification}
+          onOpenInvoice={(invId) => {
+            onSelectInvoice(invId);
+            onStatusFilterChange('ALL');
+            setCycleFilter('ALL');
+            setSubView('statements');
+            setMobileDetailOpen(true);
+          }}
+        />
+      ) : subView === 'mpesa' ? (
+        <MpesaPaybillLogView
+          state={state}
+          onNotice={onNotice}
+          onUpdatePaybill={onUpdatePaybill}
+          onOpenInvoice={(invId) => {
+            onSelectInvoice(invId);
+            onStatusFilterChange('ALL');
+            setCycleFilter('ALL');
+            setSubView('statements');
+            setMobileDetailOpen(true);
+          }}
+        />
+      ) : (
+        <>
       {/* Filter Controls */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div
@@ -260,17 +402,32 @@ export function InvoicesView({
             ))}
           </select>
 
-          <select
-            aria-label="Filter by supply zone"
-            value={zoneFilter}
-            onChange={(e) => onZoneFilterChange(e.target.value as SupplyZone | 'ALL')}
-            className="min-h-10 rounded-control border border-border/55 bg-surface px-3 text-label text-foreground focus-visible:outline-2 focus-visible:outline-primary"
+          <Button
+            tone="quiet"
+            size="sm"
+            onClick={() => setMonthlyReportModalOpen(true)}
+            title="Preview monthly municipal revenue & arrears audit report"
           >
-            <option value="ALL">All supply zones</option>
-            <option value={SupplyZone.OldBuilding}>{SupplyZone.OldBuilding}</option>
-            <option value={SupplyZone.NewBuilding}>{SupplyZone.NewBuilding}</option>
-            <option value={SupplyZone.HeavyConsumer}>{SupplyZone.HeavyConsumer}</option>
-          </select>
+            <FileText className="size-4" />
+            <span>Preview Audit</span>
+          </Button>
+
+          <Button
+            tone="primary"
+            size="sm"
+            onClick={() => {
+              const targetCycle = cycleFilter === 'ALL' ? ACTIVE_CYCLE_ID : cycleFilter;
+              const filename = downloadMonthlyMunicipalReportPdf({
+                state,
+                cycleId: targetCycle,
+              });
+              onReportDownloaded?.(filename);
+            }}
+            title="Download official municipal PDF report aggregating billed vs. collected revenue for the active cycle"
+          >
+            <Download className="size-4" />
+            <span>Download Monthly Report</span>
+          </Button>
 
           {onOpenOverdueUtility && counts.overdue > 0 ? (
             <Button tone="danger" size="sm" onClick={onOpenOverdueUtility}>
@@ -279,6 +436,58 @@ export function InvoicesView({
           ) : null}
         </div>
       </div>
+
+      {/* Lifetime Payment Summary Bar */}
+      <Surface className="px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 text-caption">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
+            <span>
+              <span className="text-muted">Paid accounts (settled): </span>
+              <strong className="text-accent tabular-nums">
+                {`${lifetimeSummary.accountsPaidInFullCount} of ${lifetimeSummary.totalAccounts}`}
+              </strong>
+              <span className="text-muted">{` (${lifetimeSummary.totalPaidInvoicesLifetime} bills paid lifetime)`}</span>
+            </span>
+            <span>
+              <span className="text-muted">Not paid lifetime: </span>
+              <strong
+                className={`tabular-nums ${
+                  lifetimeSummary.accountsNotPaidCount > 0 ? 'text-danger' : 'text-foreground'
+                }`}
+              >
+                {`${lifetimeSummary.accountsNotPaidCount} accounts`}
+              </strong>
+              <span className="text-muted">{` (${lifetimeSummary.totalUnpaidInvoicesLifetime} unpaid bills · ${formatCents(
+                lifetimeSummary.totalLifetimeOutstandingKsh
+              )})`}</span>
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setCycleFilter('ALL');
+                onStatusFilterChange(InvoiceStatus.Paid);
+              }}
+              className="cursor-pointer font-medium text-primary hover:underline"
+            >
+              Show all paid lifetime
+            </button>
+            <span className="text-muted">·</span>
+            <button
+              type="button"
+              onClick={() => {
+                setCycleFilter('ALL');
+                onStatusFilterChange(InvoiceStatus.Overdue);
+              }}
+              className="cursor-pointer font-medium text-danger hover:underline"
+            >
+              Show overdue lifetime
+            </button>
+          </div>
+        </div>
+      </Surface>
 
       {/* Master-Detail Grid */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
@@ -311,7 +520,7 @@ export function InvoicesView({
             <div className="px-6 py-12 text-center">
               <p className="text-section text-foreground">No invoices match these filters</p>
               <p className="mt-1 text-caption text-muted">
-                Reset status, cycle, or zone filters to view billed water statements.
+                Reset status, cycle, or search filters to view billed water statements.
               </p>
               <div className="mt-4">
                 <Button
@@ -319,7 +528,6 @@ export function InvoicesView({
                   size="sm"
                   onClick={() => {
                     onStatusFilterChange('ALL');
-                    onZoneFilterChange('ALL');
                     setCycleFilter('ALL');
                     setSearchQuery('');
                   }}
@@ -398,26 +606,49 @@ export function InvoicesView({
                           className="px-3 py-3.5 text-right"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {isPaid ? (
-                            <Button
-                              tone="ghost"
-                              size="sm"
-                              onClick={() => {
-                                onSelectInvoice(inv.id);
-                                setMobileDetailOpen(true);
-                              }}
-                            >
-                              Receipt
-                            </Button>
-                          ) : (
+                          <div className="flex items-center justify-end gap-1.5">
                             <Button
                               tone="quiet"
                               size="sm"
-                              onClick={() => openPaymentModal(inv.id)}
+                              onClick={() => {
+                                onSelectInvoice(inv.id);
+                                setInvoiceShareModalOpen(true);
+                              }}
+                              title="WhatsApp, Email, PDF & Printable Invoice"
                             >
-                              Pay
+                              <MessageSquare className="size-3.5 text-[#25D366]" />
+                              <span className="hidden xl:inline">Bill / Share</span>
                             </Button>
-                          )}
+
+                            {isPaid ? (
+                              <Button
+                                tone="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  onSelectInvoice(inv.id);
+                                  const payment = state.payments.find((p) => p.invoiceId === inv.id);
+                                  if (payment) {
+                                    setSelectedPaymentForReceipt(payment);
+                                  } else {
+                                    setMobileDetailOpen(true);
+                                  }
+                                }}
+                                title="Official Verifiable Payment Receipt"
+                              >
+                                <Receipt className="size-3.5 text-accent" />
+                                <span>Receipt</span>
+                              </Button>
+                            ) : (
+                              <Button
+                                tone="primary"
+                                size="sm"
+                                onClick={() => openPaymentModal(inv.id)}
+                                title="Record payment toward invoice"
+                              >
+                                Pay
+                              </Button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -459,7 +690,7 @@ export function InvoicesView({
                       {activeConnection.customerName}
                     </h2>
                     <p className="text-caption text-muted">
-                      {`${activeConnection.premiseAddress} · ${activeConnection.zone}`}
+                      {activeConnection.premiseAddress}
                     </p>
                   </div>
                   <div className="text-right">
@@ -609,44 +840,127 @@ export function InvoicesView({
               ) : null}
 
               {/* Statement Actions */}
-              <div className="flex flex-wrap items-center justify-between gap-2.5 px-5 py-4 no-print border-t border-border/35 bg-surface-muted/15">
-                <div className="flex items-center gap-2">
-                  {activeInvoice.status !== InvoiceStatus.Paid ? (
-                    <Button
-                      tone="primary"
-                      onClick={() => openPaymentModal(activeInvoice.id)}
+              <div className="space-y-2.5 px-5 py-4 no-print border-t border-border/35 bg-surface-muted/15">
+                <div className="flex flex-wrap items-center justify-between gap-2.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {activeInvoice.status !== InvoiceStatus.Paid ? (
+                      <>
+                        <Button
+                          tone="primary"
+                          onClick={() => openPaymentModal(activeInvoice.id)}
+                        >
+                          Record payment
+                        </Button>
+                        <Button
+                          tone="quiet"
+                          size="sm"
+                          onClick={() => setPaybillModalOpen(true)}
+                          title={`View or edit Lipa na M-Pesa Paybill ${
+                            state.paybill?.primaryPaybill || DEFAULT_PAYBILL_NUMBER
+                          } instructions`}
+                        >
+                          <Smartphone className="size-3.5 text-[#25D366]" />
+                          <span>M-Pesa Paybill</span>
+                        </Button>
+                      </>
+                    ) : (
+                      <span className="text-caption font-semibold text-accent">
+                        Paid in full · No balance remaining
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <a
+                      href={buildWhatsAppUrl(
+                        activeConnection.phone,
+                        buildInvoiceWhatsAppMessage({
+                          invoice: activeInvoice,
+                          connection: activeConnection,
+                          paybill: state.paybill,
+                        })
+                      )}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => {
+                        onLogNotification({
+                          connectionId: activeConnection.id,
+                          customerName: activeConnection.customerName,
+                          accountCode: activeConnection.accountCode,
+                          invoiceId: activeInvoice.id,
+                          invoiceNumber: activeInvoice.invoiceNumber,
+                          channel: 'WHATSAPP',
+                          recipient: activeConnection.phone,
+                          messageSummary: `WhatsApp-only statement ${
+                            activeInvoice.invoiceNumber
+                          } (${activeInvoice.cycleId}) · Balance ${formatCents(
+                            Math.max(0, activeInvoice.totalPayableKsh - activeInvoice.amountPaidKsh)
+                          )}`,
+                          status: 'Sent',
+                        });
+                      }}
+                      className="inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-control bg-[#25D366] px-3 text-caption font-semibold text-white shadow-xs transition-colors hover:brightness-105"
+                      title="Send this water statement via WhatsApp only"
                     >
-                      Record payment
+                      <MessageSquare className="size-3.5 fill-current" />
+                      <span>WhatsApp only</span>
+                    </a>
+
+                    <Button
+                      tone="quiet"
+                      size="sm"
+                      onClick={() => {
+                        const reading =
+                          state.readings.find((r) => r.id === activeInvoice.readingId) ?? null;
+                        const filename = downloadCustomerInvoicePdf({
+                          invoice: activeInvoice,
+                          connection: activeConnection,
+                          payments: activePayments,
+                          reading,
+                          paybill: state.paybill,
+                        });
+                        setDetailPdfNotice(`Downloaded PDF: ${filename}`);
+                      }}
+                      title="Download invoice as PDF file"
+                    >
+                      <Download className="size-3.5 text-primary" />
+                      <span>PDF</span>
                     </Button>
-                  ) : (
-                    <span className="text-caption font-semibold text-accent">
-                      Paid in full · No balance remaining
-                    </span>
-                  )}
+
+                    <Button
+                      tone="quiet"
+                      size="sm"
+                      onClick={() => setInvoiceShareModalOpen(true)}
+                      title="Send invoice statement via WhatsApp PDF, Email, or Print"
+                    >
+                      <Mail className="size-3.5 text-primary" />
+                      <span>Share</span>
+                    </Button>
+
+                    <Button
+                      tone="quiet"
+                      size="sm"
+                      onClick={() => setInvoiceShareModalOpen(true)}
+                      title="Print or inspect full invoice document"
+                    >
+                      <Printer className="size-3.5" />
+                      <span>Print</span>
+                    </Button>
+                  </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    tone="quiet"
-                    size="sm"
-                    onClick={() => setInvoiceShareModalOpen(true)}
-                    title="Send invoice statement to client on WhatsApp, Email, or Print PDF"
-                  >
-                    <MessageSquare className="size-3.5 text-[#25D366]" />
-                    <Mail className="size-3.5 text-primary" />
-                    <span>WhatsApp / Email</span>
-                  </Button>
-
-                  <Button
-                    tone="quiet"
-                    size="sm"
-                    onClick={() => setInvoiceShareModalOpen(true)}
-                    title="Print or Save PDF invoice"
-                  >
-                    <Printer className="size-3.5" />
-                    <span>Print PDF</span>
-                  </Button>
-                </div>
+                {detailPdfNotice ? (
+                  <div className="flex items-center justify-between gap-2 rounded-control border border-accent/35 bg-accent/10 px-3 py-1.5 text-caption text-accent">
+                    <span>{detailPdfNotice}</span>
+                    <button
+                      type="button"
+                      onClick={() => setDetailPdfNotice('')}
+                      className="cursor-pointer font-semibold hover:underline"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </Surface>
           ) : (
@@ -656,6 +970,8 @@ export function InvoicesView({
           )}
         </div>
       </div>
+        </>
+      )}
 
       {/* Record Payment Modal */}
       <ModalDialog
@@ -752,6 +1068,12 @@ export function InvoicesView({
               })()
             : null
         }
+        onNotificationLogged={(entry) =>
+          onLogNotification({
+            ...entry,
+            status: 'Sent',
+          })
+        }
       />
 
       {/* Client PDF Printable Invoice, WhatsApp & Email Modal */}
@@ -761,9 +1083,42 @@ export function InvoicesView({
         invoice={activeInvoice}
         connection={activeConnection}
         payments={activePayments}
+        paybill={state.paybill}
+        reading={
+          activeInvoice
+            ? state.readings.find((r) => r.id === activeInvoice.readingId) ?? null
+            : null
+        }
+        onNotificationLogged={(entry) =>
+          onLogNotification({
+            ...entry,
+            status: 'Sent',
+          })
+        }
+      />
+
+      {/* Monthly Collection and Arrears Audit Report Modal */}
+      <MonthlyCollectionReportModal
+        open={monthlyReportModalOpen}
+        onClose={() => setMonthlyReportModalOpen(false)}
+        state={state}
+        cycleId={cycleFilter === 'ALL' ? ACTIVE_CYCLE_ID : cycleFilter}
+        onReportDownloaded={onReportDownloaded}
+      />
+
+      {/* Lipa na M-Pesa Paybill Modal */}
+      <PaybillModal
+        open={paybillModalOpen}
+        onClose={() => setPaybillModalOpen(false)}
+        invoice={activeInvoice}
+        connection={activeConnection}
+        paybill={state.paybill}
+        onUpdatePaybill={onUpdatePaybill}
+        onRecordPayment={onRecordPayment}
       />
     </div>
   );
 }
+
 
 
